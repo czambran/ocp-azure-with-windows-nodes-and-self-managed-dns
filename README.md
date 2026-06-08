@@ -74,12 +74,18 @@ Note: If you would like to collect the IPs using the az CLI, see the following [
 
 Note: The commands below assume your oc context has been set 
 
-1. Deploy the Windows Machine Config Operator (wcmo): `oc apply -f PATH-TO/wmco-subscription.yaml`
+1. Deploy the Windows Machine Config Operator (WMCO): `oc apply -f ./wmco-subscription.yaml`
 2. Wait a few minutes for the Operator deployment request to reconcile
-3. Verify that the operator was deployed successfully using the following command and confirming that the phase columns shows "Succeeded": `oc get csv -n openshift-windows-machine-config-operator`
-4. Create a new SSH keypair that will used by the Operator to communicate with the Windows hosts. It is **recommended** that this key be different than the one used when creating the cluster. You can use the following command to create the new keypair: `ssh-keygen -t ecdsa -b 256 -f ./windows_ecdsa`
-5. Create the secret required by the operator with the SSH private key generated in the previous steps: `oc create secret generic cloud-private-key --from-file=private-key.pem=./windows_ecdsa -n openshift-windows-machine-config-operator`
-6. Confirm the Operator was able to create a new secret with the user data that will be used to launch new Windows worker nodes: `oc -n openshift-machine-api get secret windows-user-data`
+3. Verify that the operator was deployed successfully using the following command and confirming that the phase column shows "Succeeded": `oc get csv -n openshift-windows-machine-config-operator`
+4. Create a new SSH keypair that will be used by the Operator to communicate with the Windows hosts. It is **recommended** that this key be different than the one used when creating the cluster. You can use the following command to create the new keypair: `ssh-keygen -t ecdsa -b 256 -f ./windows_ecdsa`
+5. Create the secret required by the operator with the SSH private key generated in the previous step: `oc create secret generic cloud-private-key --from-file=private-key.pem=./windows_ecdsa -n openshift-windows-machine-config-operator`
+6. Confirm WMCO created the `windows-user-data` secret in `openshift-machine-api`. This secret is created when WMCO deploys. 
+Verify with:
+
+   `oc -n openshift-machine-api get secret windows-user-data`
+
+   If the secret is missing, check the WMCO CSV, operator pods, and events.
+
 7. Create a new MachineSet using the template provided in the repo. The MachineSet name must be **9 characters or fewer** on Azure. Adjust `<location>` and `<zone>` to match your cluster region and availability zone from `install-config.yaml`. Example for a MachineSet named `windows1` in `eastus` AZ `1`:
 
 ```bash
@@ -89,4 +95,19 @@ cat ./azure-machineset_windows_2022.yaml | \
   sed "s/<location>/eastus/g" | \
   sed "s/<zone>/1/g" | \
   oc apply -f -
+```
+
+8. Verify the MachineSet created a **Machine** resource. A new Windows worker node will not appear immediately — bootstrapping takes time. Confirm the Machine exists and is progressing:
+
+```bash
+oc get machineset windows1 -n openshift-machine-api
+oc get machines -n openshift-machine-api -l machine.openshift.io/cluster-api-machineset=windows1
+```
+
+   Wait for the Machine to reach `Running` phase and for WMCO to finish configuring the VM before expecting a node.
+
+9. After bootstrap completes (this may take 10+ minutes), verify the Windows **node** joined the cluster:
+
+```bash
+oc get nodes -l node.openshift.io/os_id=Windows
 ```
