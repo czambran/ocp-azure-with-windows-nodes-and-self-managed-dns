@@ -4,9 +4,14 @@ IPI currently assumes that all resources will be deployed in the same subscripti
 
 The steps below also include deploying the required changes to the OVN Network to support Windows-based worker nodes
 
+This guide targets **OpenShift Container Platform 4.21** or later.
+
+
 # Prerequisites
 1. The OpenShift installer is installed
-2. Dummy Public DNS hosted zone for the desired base domain(e.g: development.techcorp.com) has been created in the subscription where the cluster resources will be deployed. No records will be added to the Zone but it is needed to make the installer happy
+2. Dummy Public DNS hosted zone for the desired base domain (e.g. `development.techcorp.com`) has been created in the subscription where the cluster resources will be deployed. No records will be added to the zone but it is needed to satisfy the installer
+3. The `oc` CLI is installed (required after cluster installation for Windows node steps)
+4. The cluster name in `install-config.yaml` must **not** contain `windows`, `microsoft`, or similar words (Azure identity naming restriction)
 
 
 # Steps
@@ -32,28 +37,50 @@ featureGates: ["AzureClusterHostedDNSInstall=true"]
             userProvisionedDNS: Enabled
             ....
     ```
+
+   The guide-specific fields in `install-config.yaml` should look like this (adjust values for your environment; do not copy pull secrets or SSH keys from this example):
+
+   ```yaml
+   featureSet: CustomNoUpgrade
+   featureGates: ["AzureClusterHostedDNSInstall=true"]
+   baseDomain: development.techcorp.com
+   metadata:
+     name: mycluster
+   networking:
+     networkType: OVNKubernetes
+     clusterNetwork:
+     - cidr: 10.128.0.0/14
+       hostPrefix: 23
+   platform:
+     azure:
+       region: eastus
+       baseDomainResourceGroupName: dummy-dns-rg
+       userProvisionedDNS: Enabled
+   ```
+
 6. To run both Linux and Windows nodes in the same cluster we need to configure hybrid networking in OVN-Kubernetes. In order
    to do this we need to generate the Installation manifests from the install-config.yaml file. This process will **consume**
    the install-config.yaml file so please make a backup of it in case you need to run through the steps again with some minor modifications. You can see the complete documentation for this configuration [here](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#configuring-hybrid-ovnkubernetes_installing-azure-customizations)
 
    6.1 Generate manifest files by running: `openshift-install create manifests --dir .`
    6.2 Create an empty yaml file to host the content we need to specify the hybrid network: `touch manifests/cluster-network-03-config.yml`
-   6.3 Edit the file using your preferred editor and add the following content:
+   6.3 Edit the file using your preferred editor and add the following content. Set `hybridClusterNetwork.cidr` to a range that **does not overlap** with `networking.clusterNetwork` in your backed-up `install-config.yaml`. For example, if `clusterNetwork` is `10.128.0.0/14`, use the next block such as `10.132.0.0/14`:
 
-```
+```yaml
 apiVersion: operator.openshift.io/v1
 kind: Network
 metadata:
-    name: cluster
+  name: cluster
 spec:
-    defaultNetwork:
-        ovnKubernetesConfig:
-            hybridOverlayConfig:
-                hybridClusterNetwork:
-                # This is the next CIDR range from the one that the installer generated for the non-windows worker nodes. Adjust as needed
-                - cidr: 10.132.0.0/14 
-                  hostPrefix: 23
+  defaultNetwork:
+    ovnKubernetesConfig:
+      hybridOverlayConfig:
+        hybridClusterNetwork:
+        - cidr: 10.132.0.0/14
+          hostPrefix: 23
 ```
+
+   Do **not** set `hybridOverlayVXLANPort` on Azure. That setting is required only for vSphere clusters.
 
    6.4. Save the changes and back-up the file in case you need to recreate the cluster
    6.5. Deploy the cluster: `openshift-install create cluster --dir . --log-level=info`
