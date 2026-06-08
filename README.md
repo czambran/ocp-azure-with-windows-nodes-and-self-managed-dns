@@ -1,72 +1,93 @@
-# Instructions for how to set-up an OpenShift cluster in Azure with Self-Managed DNS and Windows worker nodes
+# OpenShift on Azure with Self-Managed DNS and Windows Worker Nodes
 
-IPI currently assumes that all resources will be deployed in the same subscription. To be able to manage the DNS of a cluster with a public endpoint from a different subscription or from outside of Azure altogether, we can use the user-provisioned DNS capability of IPI that became available in Tech Preview for Azure in version 4.21
+## Overview
 
-The steps below also include deploying the required changes to the OVN Network to support Windows-based worker nodes
+Installer-provisioned infrastructure (IPI) on Azure normally assumes all resources deploy in the same subscription. To manage cluster DNS from a **different subscription** or from **outside Azure**, use the user-provisioned DNS capability available in Tech Preview for Azure in OpenShift Container Platform **4.21+**.
 
-This guide targets **OpenShift Container Platform 4.21** or later.
+This guide also covers the OVN-Kubernetes hybrid overlay configuration required to run **Linux and Windows worker nodes** in the same cluster.
 
+Official reference: [Installing a cluster with customizations on Azure](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#installation-initializing_installing-azure-customizations)
 
-# Prerequisites
-1. The OpenShift installer is installed
-2. Dummy Public DNS hosted zone for the desired base domain (e.g. `development.techcorp.com`) has been created in the subscription where the cluster resources will be deployed. No records will be added to the zone but it is needed to satisfy the installer
-3. The `oc` CLI is installed (required after cluster installation for Windows node steps)
-4. The cluster name in `install-config.yaml` must **not** contain `windows`, `microsoft`, or similar words (Azure identity naming restriction)
+## Architecture
 
-
-# Steps
-
-Note: The steps below are from the following documentation page: https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#installation-initializing_installing-azure-customizations
-
-The following steps assume that the OpenShift installer is already installed on the machine you will be using
-to run the following commands:
-
-1. Create a new directory (avoid reusing an existing directory) to house the files required for installation of the cluster. e.g: `mkdir ocp-cluster; cd ocp-cluster`
-2. Generate the installation files: `openshift-install create install-config --dir .`. Follow the prompts and select the correct options for your deployment. Make sure to remember the name of the cluster as you will need this to create the required DNS records.
-3. Open the newly created install-config.yaml file and make any changes necessary like the number of replicas, resource group for the network, etc...
-4. To enable the user-managed Technology Preview capabilities of the installer add the following as root level attributes in install-config.yaml:
+```mermaid
+flowchart LR
+  subgraph computeSub [Compute subscription]
+    DummyZone[Dummy Azure DNS zone]
+    ClusterRG[Cluster resource group]
+    LB[Public load balancers]
+    LinuxWorkers[Linux workers]
+    WinWorkers[Windows workers via WMCO]
+  end
+  subgraph dnsSub [DNS subscription or external DNS]
+    AuthZone[Authoritative DNS zone]
+    ApiRecord["api.cluster.baseDomain"]
+    AppsRecord["*.apps.cluster.baseDomain"]
+  end
+  Installer[openshift-install] --> DummyZone
+  Installer --> ClusterRG
+  LB --> ApiRecord
+  LB --> AppsRecord
+  AuthZone --> ApiRecord
+  AuthZone --> AppsRecord
+  WMCO[WMCO] --> WinWorkers
+  HybridOVN[Hybrid OVN overlay] --> LinuxWorkers
+  HybridOVN --> WinWorkers
 ```
+
+- **Compute subscription:** cluster resources, dummy DNS zone (installer requirement only), Linux workers, and Windows workers provisioned by WMCO.
+- **DNS subscription (or external DNS):** authoritative `api` and `*.apps` records customers use to reach the cluster.
+
+## Prerequisites
+
+1. The OpenShift installer is installed on the machine used to run installation commands.
+2. A dummy public DNS hosted zone for the desired base domain (e.g. `development.techcorp.com`) exists in the subscription where cluster resources will be deployed. No records are added to this zone — it satisfies the installer only.
+3. The `oc` CLI is installed (required after cluster installation for Windows node steps).
+4. The cluster name in `install-config.yaml` must **not** contain `windows`, `microsoft`, or similar words (Azure identity naming restriction).
+
+## Phase 1: Install the cluster
+
+The steps below assume the OpenShift installer is installed on the machine you will use to run the following commands.
+
+1. Create a new directory (avoid reusing an existing directory) to house the files required for installation of the cluster. e.g. `mkdir ocp-cluster; cd ocp-cluster`
+2. Generate the installation files: `openshift-install create install-config --dir .`. Follow the prompts and select the correct options for your deployment. Make sure to remember the name of the cluster as you will need this to create the required DNS records.
+3. Open the newly created `install-config.yaml` file and make any changes necessary like the number of replicas, resource group for the network, etc.
+4. To enable the user-managed Technology Preview capabilities of the installer, add the following as root-level attributes in `install-config.yaml`:
+
+```yaml
 featureSet: CustomNoUpgrade
 featureGates: ["AzureClusterHostedDNSInstall=true"]
 ```
-5. Look for the *platform* 'root' level attribute and add the child attribute "userProvisionedDNS" under the existing "azure" child-attribute of platform. The document will look something like this:
-    ```
-    ...
-    platform:
-        azure:
-            userProvisionedDNS: Enabled
-            ....
-    ```
 
-   The guide-specific fields in `install-config.yaml` should look like this (adjust values for your environment; do not copy pull secrets or SSH keys from this example):
+5. Under `platform.azure`, add `userProvisionedDNS: Enabled`. The guide-specific fields in `install-config.yaml` should look like this (adjust values for your environment; do not copy pull secrets or SSH keys from this example):
 
-   ```yaml
-   featureSet: CustomNoUpgrade
-   featureGates: ["AzureClusterHostedDNSInstall=true"]
-   baseDomain: development.techcorp.com
-   metadata:
-     name: mycluster
-   networking:
-     networkType: OVNKubernetes
-     clusterNetwork:
-     - cidr: 10.128.0.0/14
-       hostPrefix: 23
-   platform:
-     azure:
-       region: eastus
-       baseDomainResourceGroupName: dummy-dns-rg
-       userProvisionedDNS: Enabled
-   ```
+```yaml
+featureSet: CustomNoUpgrade
+featureGates: ["AzureClusterHostedDNSInstall=true"]
+baseDomain: development.techcorp.com
+metadata:
+  name: mycluster
+networking:
+  networkType: OVNKubernetes
+  clusterNetwork:
+  - cidr: 10.128.0.0/14
+    hostPrefix: 23
+platform:
+  azure:
+    region: eastus
+    baseDomainResourceGroupName: dummy-dns-rg
+    userProvisionedDNS: Enabled
+```
 
-   See also: [examples/install-config.snippet.yaml](./examples/install-config.snippet.yaml)
+See also: [examples/install-config.snippet.yaml](./examples/install-config.snippet.yaml)
 
-6. To run both Linux and Windows nodes in the same cluster we need to configure hybrid networking in OVN-Kubernetes. In order
-   to do this we need to generate the Installation manifests from the install-config.yaml file. This process will **consume**
-   the install-config.yaml file so please make a backup of it in case you need to run through the steps again with some minor modifications. You can see the complete documentation for this configuration [here](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#configuring-hybrid-ovnkubernetes_installing-azure-customizations)
+6. To run both Linux and Windows nodes in the same cluster, configure hybrid networking in OVN-Kubernetes. Generate installation manifests from `install-config.yaml`. This process will **consume** the `install-config.yaml` file, so back it up first. See the [hybrid OVN-Kubernetes documentation](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#configuring-hybrid-ovnkubernetes_installing-azure-customizations) for details.
 
-   6.1 Generate manifest files by running: `openshift-install create manifests --dir .`
-   6.2 Create an empty yaml file to host the content we need to specify the hybrid network: `touch manifests/cluster-network-03-config.yml`
-   6.3 Edit the file using your preferred editor and add the following content. Set `hybridClusterNetwork.cidr` to a range that **does not overlap** with `networking.clusterNetwork` in your backed-up `install-config.yaml`. For example, if `clusterNetwork` is `10.128.0.0/14`, use the next block such as `10.132.0.0/14`:
+   6.1 Generate manifest files: `openshift-install create manifests --dir .`
+
+   6.2 Create the hybrid network manifest: `touch manifests/cluster-network-03-config.yml`
+
+   6.3 Edit the file and add the following content. Set `hybridClusterNetwork.cidr` to a range that **does not overlap** with `networking.clusterNetwork` in your backed-up `install-config.yaml`. For example, if `clusterNetwork` is `10.128.0.0/14`, use the next block such as `10.132.0.0/14`:
 
 ```yaml
 apiVersion: operator.openshift.io/v1
@@ -86,38 +107,46 @@ spec:
 
    See also: [examples/cluster-network-03-config.yml](./examples/cluster-network-03-config.yml)
 
-   6.4. Save the changes and back-up the file in case you need to recreate the cluster
-   6.5. Deploy the cluster: `openshift-install create cluster --dir . --log-level=info`
-   6.6. When user-managed DNS is enabled, components of the cluster will know how to reach the Control Plane to complete the installation but the installer will not as it is outside the cluster. Once you see the following output from the installer script, it is time to update the authoritative hosted zone (not the dummy one we created to make the installer happy) for the chosen domain: `INFO Waiting up to 45m0s (until X:XX XX) for bootstrapping to complete`.  See the instructions for this below
-   
+   6.4 Save the changes and back up the file in case you need to recreate the cluster.
 
-## Updates to authoritative Hosted Zone to complete cluster deployment
+   6.5 Deploy the cluster: `openshift-install create cluster --dir . --log-level=info`
 
-Note: If you would like to collect the IPs using the az CLI, see the following [page](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#installation-azure-provisioning-own-dns-records_installing-azure-customizations)
+   6.6 When user-managed DNS is enabled, cluster components can reach the control plane, but the installer host cannot resolve cluster-internal DNS. When you see `INFO Waiting up to 45m0s (until X:XX XX) for bootstrapping to complete`, update the **authoritative** hosted zone (not the dummy zone) as described below.
 
-   1. Collect the public IP for the API server from the Public Load Balancer created by the installer. It will be the Load Balancer with the name that **doesn't end** with '-int' and for the rule that listens on port 6443
-   2. Add an A record for the following entry `api.<cluster_name>.<base_domain>` that points to the IP collected in the previous step
-   3. Collect the public IP for the Ingress Gateway/Routes Endpoints (This is required to access the OpenShift Web Console) from the Public Load Balancer created by the installer. It will be the Load Balancer with the name that *doesn't end* with '-int' and for the rule that listens on port 443. It may take a about 10 minutes to see the additional Load Balancer Rules
-   4. Add an A record for the following entry `*.apps.<cluster_name>.<base_domain>` that points to the IP collected in the previous step
-       
+### Update authoritative DNS to complete installation
 
-## Additional updates to deploy Windows worker nodes
+Note: To collect IPs using the Azure CLI, see [Provisioning your own DNS records](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#installation-azure-provisioning-own-dns-records_installing-azure-customizations).
 
-Note: The commands below assume your oc context has been set 
+1. Collect the public IP for the API server from the public load balancer created by the installer — the load balancer whose name **does not** end with `-int`, for the rule listening on port **6443**.
+2. Add an A record for `api.<cluster_name>.<base_domain>` pointing to that IP.
+3. Collect the public IP for the Ingress/routes endpoint (required for the OpenShift web console) from the same public load balancer, for the rule listening on port **443**. It may take about 10 minutes for this rule to appear.
+4. Add an A record for `*.apps.<cluster_name>.<base_domain>` pointing to the Ingress IP.
+
+## Phase 2: Deploy Windows worker nodes
+
+Note: The commands below assume your `oc` context is set to the installed cluster.
 
 1. Deploy the Windows Machine Config Operator (WMCO): `oc apply -f ./wmco-subscription.yaml`
-2. Wait a few minutes for the Operator deployment request to reconcile
-3. Verify that the operator was deployed successfully using the following command and confirming that the phase column shows "Succeeded": `oc get csv -n openshift-windows-machine-config-operator`
-4. Create a new SSH keypair that will be used by the Operator to communicate with the Windows hosts. It is **recommended** that this key be different than the one used when creating the cluster. You can use the following command to create the new keypair: `ssh-keygen -t ecdsa -b 256 -f ./windows_ecdsa`
-5. Create the secret required by the operator with the SSH private key generated in the previous step: `oc create secret generic cloud-private-key --from-file=private-key.pem=./windows_ecdsa -n openshift-windows-machine-config-operator`
-6. Confirm WMCO created the `windows-user-data` secret in `openshift-machine-api`. This secret is created when WMCO deploys. 
-Verify with:
+2. Wait a few minutes for the operator deployment request to reconcile.
+3. Verify the operator deployed successfully — the CSV phase column should show `Succeeded`:
+
+   `oc get csv -n openshift-windows-machine-config-operator`
+
+4. Create a new SSH keypair for the operator to communicate with Windows hosts. It is **recommended** that this key differ from the cluster installation key:
+
+   `ssh-keygen -t ecdsa -b 256 -f ./windows_ecdsa`
+
+5. Create the secret required by the operator:
+
+   `oc create secret generic cloud-private-key --from-file=private-key.pem=./windows_ecdsa -n openshift-windows-machine-config-operator`
+
+6. Confirm WMCO created the `windows-user-data` secret in `openshift-machine-api`. This secret is created when WMCO deploys. Verify with:
 
    `oc -n openshift-machine-api get secret windows-user-data`
 
    If the secret is missing, check the WMCO CSV, operator pods, and events.
 
-7. Create a new MachineSet using the template provided in the repo. The MachineSet name must be **9 characters or fewer** on Azure. Adjust `<location>` and `<zone>` to match your cluster region and availability zone from `install-config.yaml`. Example for a MachineSet named `windows1` in `eastus` AZ `1`:
+7. Create a Windows MachineSet using the template in this repo. The MachineSet name must be **9 characters or fewer** on Azure. Adjust `<location>` and `<zone>` to match your cluster region and availability zone from `install-config.yaml`. Example for a MachineSet named `windows1` in `eastus` AZ `1`:
 
 ```bash
 cat ./azure-machineset_windows_2022.yaml | \
@@ -128,7 +157,7 @@ cat ./azure-machineset_windows_2022.yaml | \
   oc apply -f -
 ```
 
-8. Verify the MachineSet created a **Machine** resource. A new Windows worker node will not appear immediately — bootstrapping takes time. Confirm the Machine exists and is progressing:
+8. Verify the MachineSet created a **Machine** resource. A Windows worker node will not appear immediately — bootstrapping takes time:
 
 ```bash
 oc get machineset windows1 -n openshift-machine-api
@@ -152,3 +181,12 @@ oc get nodes -l node.openshift.io/os_id=Windows
 | `windows-user-data` missing after WMCO install | WMCO failed to reconcile on deploy | Check WMCO operator pods, logs, and events — do not wait for a MachineSet |
 | MachineSet fails or VM name error | MachineSet name too long for Azure | MachineSet name must be **9 characters or fewer** |
 | Install timed out after DNS was fixed | Installer did not resume automatically | Run `openshift-install wait-for install-complete --dir . --log-level=info` |
+
+## Reference files
+
+| File | Purpose |
+|------|---------|
+| [examples/install-config.snippet.yaml](./examples/install-config.snippet.yaml) | Guide-specific `install-config.yaml` fields |
+| [examples/cluster-network-03-config.yml](./examples/cluster-network-03-config.yml) | Hybrid OVN-Kubernetes overlay manifest |
+| [wmco-subscription.yaml](./wmco-subscription.yaml) | WMCO OperatorGroup and Subscription |
+| [azure-machineset_windows_2022.yaml](./azure-machineset_windows_2022.yaml) | Windows Server 2022 MachineSet template |
