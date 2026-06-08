@@ -1,0 +1,19 @@
+# Reference snippet — merge these fields into your install-config.yaml.
+# Do not use as-is: add pullSecret, sshKey, compute/controlPlane, and other required values.
+# Generate a base file with: openshift-install create install-config --dir .
+
+featureSet: CustomNoUpgrade
+featureGates: ["AzureClusterHostedDNSInstall=true"]
+baseDomain: development.techcorp.com
+metadata:
+  name: mycluster
+networking:
+  networkType: OVNKubernetes
+  clusterNetwork:
+  - cidr: 10.128.0.0/14
+    hostPrefix: 23
+platform:
+  azure:
+    region: eastus
+    baseDomainResourceGroupName: dummy-dns-rg
+    userProvisionedDNS: Enabled

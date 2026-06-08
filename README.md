@@ -58,6 +58,8 @@ featureGates: ["AzureClusterHostedDNSInstall=true"]
        userProvisionedDNS: Enabled
    ```
 
+   See also: [examples/install-config.snippet.yaml](./examples/install-config.snippet.yaml)
+
 6. To run both Linux and Windows nodes in the same cluster we need to configure hybrid networking in OVN-Kubernetes. In order
    to do this we need to generate the Installation manifests from the install-config.yaml file. This process will **consume**
    the install-config.yaml file so please make a backup of it in case you need to run through the steps again with some minor modifications. You can see the complete documentation for this configuration [here](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#configuring-hybrid-ovnkubernetes_installing-azure-customizations)
@@ -81,6 +83,8 @@ spec:
 ```
 
    Do **not** set `hybridOverlayVXLANPort` on Azure. That setting is required only for vSphere clusters.
+
+   See also: [examples/cluster-network-03-config.yml](./examples/cluster-network-03-config.yml)
 
    6.4. Save the changes and back-up the file in case you need to recreate the cluster
    6.5. Deploy the cluster: `openshift-install create cluster --dir . --log-level=info`
