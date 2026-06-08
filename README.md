@@ -8,36 +8,6 @@ This guide also covers the OVN-Kubernetes hybrid overlay configuration required 
 
 Official reference: [Installing a cluster with customizations on Azure](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#installation-initializing_installing-azure-customizations)
 
-## Architecture
-
-```mermaid
-flowchart LR
-  subgraph computeSub [Compute subscription]
-    DummyZone[Dummy Azure DNS zone]
-    ClusterRG[Cluster resource group]
-    LB[Public load balancers]
-    LinuxWorkers[Linux workers]
-    WinWorkers[Windows workers via WMCO]
-  end
-  subgraph dnsSub [DNS subscription or external DNS]
-    AuthZone[Authoritative DNS zone]
-    ApiRecord["api.cluster.baseDomain"]
-    AppsRecord["*.apps.cluster.baseDomain"]
-  end
-  Installer[openshift-install] --> DummyZone
-  Installer --> ClusterRG
-  LB --> ApiRecord
-  LB --> AppsRecord
-  AuthZone --> ApiRecord
-  AuthZone --> AppsRecord
-  WMCO[WMCO] --> WinWorkers
-  HybridOVN[Hybrid OVN overlay] --> LinuxWorkers
-  HybridOVN --> WinWorkers
-```
-
-- **Compute subscription:** cluster resources, dummy DNS zone (installer requirement only), Linux workers, and Windows workers provisioned by WMCO.
-- **DNS subscription (or external DNS):** authoritative `api` and `*.apps` records customers use to reach the cluster.
-
 ## Prerequisites
 
 1. The OpenShift installer is installed on the machine used to run installation commands.
