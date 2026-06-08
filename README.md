@@ -1,11 +1,11 @@
-# Instructions for how to set-up a Openshift cluster in Azure with Self-Managed DNS and Windows worker nodes
+# Instructions for how to set-up an OpenShift cluster in Azure with Self-Managed DNS and Windows worker nodes
 
-IPI currently assumes that all resources will be deployed in the same subscription. To be able to manage the DNS of a cluster with a public endopoint from a different subscription or from outside of Azure altogether, we can use the user-provisioned DNS capability of IPI that became available in Tech Preview for Azure in version 4.21
+IPI currently assumes that all resources will be deployed in the same subscription. To be able to manage the DNS of a cluster with a public endpoint from a different subscription or from outside of Azure altogether, we can use the user-provisioned DNS capability of IPI that became available in Tech Preview for Azure in version 4.21
 
 The steps below also include deploying the required changes to the OVN Network to support Windows-based worker nodes
 
-# Pre-requisites
-1. The openshift installer is installed
+# Prerequisites
+1. The OpenShift installer is installed
 2. Dummy Public DNS hosted zone for the desired base domain(e.g: development.techcorp.com) has been created in the subscription where the cluster resources will be deployed. No records will be added to the Zone but it is needed to make the installer happy
 
 
@@ -13,13 +13,13 @@ The steps below also include deploying the required changes to the OVN Network t
 
 Note: The steps below are from the following documentation page: https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#installation-initializing_installing-azure-customizations
 
-The following steps assume that the openshif installer is already installed on the machine you will be using
+The following steps assume that the OpenShift installer is already installed on the machine you will be using
 to run the following commands:
 
 1. Create a new directory (avoid reusing an existing directory) to house the files required for installation of the cluster. e.g: `mkdir ocp-cluster; cd ocp-cluster`
 2. Generate the installation files: `openshift-install create install-config --dir .`. Follow the prompts and select the correct options for your deployment. Make sure to remember the name of the cluster as you will need this to create the required DNS records.
 3. Open the newly created install-config.yaml file and make any changes necessary like the number of replicas, resource group for the network, etc...
-4. To enabled the user-managed Technology Preview capabilities of the installer add the following as root level attributes in install-config.yaml:
+4. To enable the user-managed Technology Preview capabilities of the installer add the following as root level attributes in install-config.yaml:
 ```
 featureSet: CustomNoUpgrade
 featureGates: ["AzureClusterHostedDNSInstall=true"]
@@ -34,10 +34,10 @@ featureGates: ["AzureClusterHostedDNSInstall=true"]
     ```
 6. To run both Linux and Windows nodes in the same cluster we need to configure hybrid networking in OVN-Kubernetes. In order
    to do this we need to generate the Installation manifests from the install-config.yaml file. This process will **consume**
-   the install-config.yaml file so please make a backup of it in case you need to run through the steps again with some minor modififications. You can see the complete documentation for this configuration [here](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#configuring-hybrid-ovnkubernetes_installing-azure-customizations)
+   the install-config.yaml file so please make a backup of it in case you need to run through the steps again with some minor modifications. You can see the complete documentation for this configuration [here](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#configuring-hybrid-ovnkubernetes_installing-azure-customizations)
 
    6.1 Generate manifest files by running: `openshift-install create manifests --dir .`
-   6.2 Create an empty yaml file to host the content we need to specify the hybrid networ: `touch manifests/cluster-network-03-config.yml`
+   6.2 Create an empty yaml file to host the content we need to specify the hybrid network: `touch manifests/cluster-network-03-config.yml`
    6.3 Edit the file using your preferred editor and add the following content:
 
 ```
@@ -66,7 +66,7 @@ Note: If you would like to collect the IPs using the az CLI, see the following [
 
    1. Collect the public IP for the API server from the Public Load Balancer created by the installer. It will be the Load Balancer with the name that **doesn't end** with '-int' and for the rule that listens on port 6443
    2. Add an A record for the following entry `api.<cluster_name>.<base_domain>` that points to the IP collected in the previous step
-   3. Collect the public IP for the Ingress Gateway/Routes Endpoints (This is required to access the Openshift Web Console) from the Public Load Balancer created by the installer. It will be the Load Balancer with the name that *doesn't end* with '-int' and for the rule that listens on port 443. It may take a about 10 minutes to see the additional Load Balancer Rules
+   3. Collect the public IP for the Ingress Gateway/Routes Endpoints (This is required to access the OpenShift Web Console) from the Public Load Balancer created by the installer. It will be the Load Balancer with the name that *doesn't end* with '-int' and for the rule that listens on port 443. It may take a about 10 minutes to see the additional Load Balancer Rules
    4. Add an A record for the following entry `*.apps.<cluster_name>.<base_domain>` that points to the IP collected in the previous step
        
 
