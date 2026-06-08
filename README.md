@@ -80,11 +80,13 @@ Note: The commands below assume your oc context has been set
 4. Create a new SSH keypair that will used by the Operator to communicate with the Windows hosts. It is **recommended** that this key be different than the one used when creating the cluster. You can use the following command to create the new keypair: `ssh-keygen -t ecdsa -b 256 -f ./windows_ecdsa`
 5. Create the secret required by the operator with the SSH private key generated in the previous steps: `oc create secret generic cloud-private-key --from-file=private-key.pem=./windows_ecdsa -n openshift-windows-machine-config-operator`
 6. Confirm the Operator was able to create a new secret with the user data that will be used to launch new Windows worker nodes: `oc -n openshift-machine-api get secret windows-user-data`
-7. Create a new MachineSet using the template provided in the repo. Here is a multiline bash command to create one with the name windows1, in the eastus region, and AZ1: 
+7. Create a new MachineSet using the template provided in the repo. The MachineSet name must be **9 characters or fewer** on Azure. Adjust `<location>` and `<zone>` to match your cluster region and availability zone from `install-config.yaml`. Example for a MachineSet named `windows1` in `eastus` AZ `1`:
+
+```bash
+cat ./azure-machineset_windows_2022.yaml | \
+  sed "s/<infrastructure_id>/$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')/g" | \
+  sed "s/<windows_machine_set_name>/windows1/g" | \
+  sed "s/<location>/eastus/g" | \
+  sed "s/<zone>/1/g" | \
+  oc apply -f -
 ```
-cat PATH_TO_REPO/azure-machineset_windows_2022.yaml | \
- sed "s/<infrastructure_id>/$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')/g" | \
- sed "s/<windows_machine_set_name>/windows1/g" | \
- sed "s/<location>/eastus/g" | \
- sed "s/<zone>/1/g" 
- ```
