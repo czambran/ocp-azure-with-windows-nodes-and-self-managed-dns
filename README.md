@@ -179,9 +179,16 @@ infra_id=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureNam
 cluster_resource_group_name="${infra_id}-rg"
 lb_name="${infra_id}-internal"
 
-az network lb rule list -g "${cluster_resource_group_name}" --lb-name "${lb_name}" \
-  --query "[?frontendPort==\`6443\`].{name:name, privateIP:frontendIpConfiguration.privateIpAddress}" -o table
+frontendipconfig_id=$(az network lb show -n "${lb_name}" -g "${cluster_resource_group_name}" \
+  --query "loadBalancingRules[?frontendPort==\`6443\`].frontendIPConfiguration.id | [0]" -o tsv)
+
+frontendipconfig_name=${frontendipconfig_id##*/}
+
+az network lb frontend-ip show -n "${frontendipconfig_name}" --lb-name "${lb_name}" \
+  -g "${cluster_resource_group_name}" --query "privateIPAddress" -o tsv
 ```
+
+   The last command prints the private IP to use for the `api-int` A record in step 3.
 
 3. In your authoritative hosted zone, add an **A record** for `api-int.<cluster_name>.<base_domain>` pointing to that private IP.
 
