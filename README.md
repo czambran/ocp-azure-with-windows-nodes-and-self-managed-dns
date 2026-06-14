@@ -2,26 +2,78 @@
 
 ## Overview
 
-Installer-provisioned infrastructure (IPI) on Azure normally assumes all resources deploy in the same subscription. To manage cluster DNS from a **different subscription** or from **outside Azure**, use the user-provisioned DNS capability available in Tech Preview for Azure in OpenShift Container Platform **4.21+**.
+Installer-provisioned infrastructure (IPI) on Azure normally assumes all resources deploy in the same subscription. This guide addresses two common enterprise constraints:
 
-This guide also covers the OVN-Kubernetes hybrid overlay configuration required to run **Linux and Windows worker nodes** in the same cluster.
+- **DNS** is managed in a **different subscription** or **outside Azure** — use user-provisioned DNS (Tech Preview in OpenShift Container Platform **4.21+**).
+- **Networking** is pre-provisioned in a **separate resource group within the same subscription** where the installer creates cluster resources — the OpenShift installer consumes an existing VNet and subnets rather than creating them.
 
-Official reference: [Installing a cluster with customizations on Azure](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#installation-initializing_installing-azure-customizations)
+The guide also covers the OVN-Kubernetes hybrid overlay configuration required to run **Linux and Windows worker nodes** in the same cluster. Windows workers are added post-install via WMCO and attach to the same pre-provisioned compute subnet as Linux workers.
+
+Official references:
+- [Installing a cluster with customizations on Azure](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#installation-initializing_installing-azure-customizations)
+- [Reusing a VNet](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/installing_on_azure/installer-provisioned-infrastructure#installation-platform-azure-vnet_installing-azure-customizations)
+
+## Architecture
+
+```mermaid
+flowchart TB
+  subgraph computeSub [Compute subscription]
+    subgraph networkRG [Network resource group]
+      VNet[Existing VNet]
+      CPSubnet[controlPlaneSubnet]
+      WorkerSubnet[computeSubnet]
+    end
+    subgraph clusterRG [Cluster resource group]
+      ControlPlane[Control plane VMs]
+      LinuxWorkers[Linux worker VMs]
+      WinWorkers[Windows worker VMs]
+      LB[Load balancers]
+      WMCO[WMCO]
+      HybridOVN[Hybrid OVN overlay]
+    end
+    subgraph dummyDnsRG [Dummy DNS resource group]
+      DummyZone[Dummy DNS zone]
+    end
+  end
+  subgraph dnsElsewhere [DNS subscription or external]
+    AuthZone[Authoritative DNS zone]
+  end
+  Installer[openshift-install] --> VNet
+  Installer --> clusterRG
+  ControlPlane --> CPSubnet
+  LinuxWorkers --> WorkerSubnet
+  WinWorkers --> WorkerSubnet
+  WMCO --> WinWorkers
+  HybridOVN --> LinuxWorkers
+  HybridOVN --> WinWorkers
+  LB --> AuthZone
+```
+
+- **Network resource group (same subscription):** pre-provisioned VNet, control plane subnet, and compute subnet. All cluster and Windows worker NICs attach to subnets here.
+- **Cluster resource group (same subscription):** control plane VMs, Linux workers, Windows workers (via WMCO), load balancers, disks, and identities — created by the installer.
+- **Dummy DNS resource group (same subscription):** empty DNS zone required by the installer when using user-provisioned DNS. No customer-facing records are added here.
+- **DNS subscription (or external DNS):** authoritative `api` and `*.apps` records customers use to reach the cluster.
 
 ## Prerequisites
 
 1. The OpenShift installer is installed on the machine used to run installation commands.
-2. A dummy public DNS hosted zone for the desired base domain (e.g. `development.techcorp.com`) exists in the subscription where cluster resources will be deployed. No records are added to this zone — it satisfies the installer only.
+2. (Optional: Only needed when generating the install-config.yaml through the installer propmpts) A dummy public DNS hosted zone for the desired base domain (e.g. `development.techcorp.com`) exists in the subscription where cluster resources will be deployed. No records are added to this zone — it satisfies the installer only.
 3. The `oc` CLI is installed (required after cluster installation for Windows node steps).
 4. The cluster name in `install-config.yaml` must **not** contain `windows`, `microsoft`, or similar words (Azure identity naming restriction).
+5. A VNet and subnets exist in a **network resource group** in the same subscription used for cluster installation.
+6. Two subnets are available: one for the **control plane** (`controlPlaneSubnet`) and one for **compute/worker** nodes (`computeSubnet`). Windows workers use the compute subnet.
+7. The VNet CIDR contains the `networking.machineNetwork` CIDR you will set in `install-config.yaml`.
+8. Subnets use Azure-assigned DHCP (not static IP assignments).
+9. Network security group rules for required cluster ports (6443, 443, 22623, etc.) are in place **before** installation. See the [VNet NSG requirements](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/installing_on_azure/installer-provisioned-infrastructure#installation-platform-azure-vnet_installing-azure-customizations).
+10. The Azure service principal used for installation can access both the **network resource group** and the resource groups where cluster and DNS resources are created.
 
 ## Phase 1: Install the cluster
 
 The steps below assume the OpenShift installer is installed on the machine you will use to run the following commands.
 
 1. Create a new directory (avoid reusing an existing directory) to house the files required for installation of the cluster. e.g. `mkdir ocp-cluster; cd ocp-cluster`
-2. Generate the installation files: `openshift-install create install-config --dir .`. Follow the prompts and select the correct options for your deployment. Make sure to remember the name of the cluster as you will need this to create the required DNS records.
-3. Open the newly created `install-config.yaml` file and make any changes necessary like the number of replicas, resource group for the network, etc.
+2. Generate the installation files: `openshift-install create install-config --dir .`. Follow the prompts and select the correct options for your deployment. When prompted, provide the network resource group, VNet, and subnet names from your pre-provisioned network landing zone. Make sure to remember the cluster name — you will need it to create DNS records.
+3. Open the newly created `install-config.yaml` file and configure replicas, `networking.machineNetwork`, and the pre-provisioned network fields under `platform.azure` (see step 5).
 4. To enable the user-managed Technology Preview capabilities of the installer, add the following as root-level attributes in `install-config.yaml`:
 
 ```yaml
@@ -29,7 +81,7 @@ featureSet: CustomNoUpgrade
 featureGates: ["AzureClusterHostedDNSInstall=true"]
 ```
 
-5. Under `platform.azure`, add `userProvisionedDNS: Enabled`. The guide-specific fields in `install-config.yaml` should look like this (adjust values for your environment; do not copy pull secrets or SSH keys from this example):
+5. Under `platform.azure`, reference your pre-provisioned VNet and enable user-provisioned DNS. The guide-specific fields in `install-config.yaml` should look like this (adjust values for your environment; do not copy pull secrets or SSH keys from this example):
 
 ```yaml
 featureSet: CustomNoUpgrade
@@ -39,6 +91,8 @@ metadata:
   name: mycluster
 networking:
   networkType: OVNKubernetes
+  machineNetwork:
+  - cidr: 10.0.0.0/16
   clusterNetwork:
   - cidr: 10.128.0.0/14
     hostPrefix: 23
@@ -46,8 +100,14 @@ platform:
   azure:
     region: eastus
     baseDomainResourceGroupName: dummy-dns-rg
+    networkResourceGroupName: example-network-rg
+    virtualNetwork: example-vnet
+    controlPlaneSubnet: example-controlplane-subnet
+    computeSubnet: example-worker-subnet
     userProvisionedDNS: Enabled
 ```
+
+Set `networking.machineNetwork` to an address range that fits within your VNet CIDR and the subnet ranges you provide. The installer creates cluster resources in its own resource group; it does **not** create the VNet or subnets.
 
 See also: [examples/install-config.snippet.yaml](./examples/install-config.snippet.yaml)
 
@@ -116,7 +176,7 @@ Note: The commands below assume your `oc` context is set to the installed cluste
 
    If the secret is missing, check the WMCO CSV, operator pods, and events.
 
-7. Create a Windows MachineSet using the template in this repo. The MachineSet name must be **9 characters or fewer** on Azure. Adjust `<location>` and `<zone>` to match your cluster region and availability zone from `install-config.yaml`. Example for a MachineSet named `windows1` in `eastus` AZ `1`:
+7. Create a Windows MachineSet using the template in this repo. The MachineSet name must be **9 characters or fewer** on Azure. Set network placeholders to match your backed-up `install-config.yaml` — **not** the installer-default `{infra_id}-vnet` / `{infra_id}-worker-subnet` names. Example for a MachineSet named `windows1` in `eastus` AZ `1`:
 
 ```bash
 cat ./azure-machineset_windows_2022.yaml | \
@@ -124,8 +184,13 @@ cat ./azure-machineset_windows_2022.yaml | \
   sed "s/<windows_machine_set_name>/windows1/g" | \
   sed "s/<location>/eastus/g" | \
   sed "s/<zone>/1/g" | \
+  sed "s/<network_resource_group>/example-network-rg/g" | \
+  sed "s/<vnet_name>/example-vnet/g" | \
+  sed "s/<compute_subnet>/example-worker-subnet/g" | \
   oc apply -f -
 ```
+
+Replace `example-network-rg`, `example-vnet`, and `example-worker-subnet` with the values from `platform.azure.networkResourceGroupName`, `platform.azure.virtualNetwork`, and `platform.azure.computeSubnet` in your install-config backup.
 
 8. Verify the MachineSet created a **Machine** resource. A Windows worker node will not appear immediately — bootstrapping takes time:
 
@@ -148,7 +213,10 @@ oc get nodes -l node.openshift.io/os_id=Windows
 |---------|--------------|-----|
 | Installer stuck at bootstrap | External DNS not pointing to API load balancer | Add `api.<cluster>.<base_domain>` A record; verify resolution from the install bastion |
 | Console unreachable | Missing `*.apps.*` DNS record | Wait for the port 443 load balancer rule (~10 min), then add the Ingress IP |
+| Install fails validating subnets | Wrong subnet names or network resource group | Verify `networkResourceGroupName`, `virtualNetwork`, `controlPlaneSubnet`, and `computeSubnet` in `install-config.yaml` |
+| Install fails on Azure API / NSG | Missing NSG rules on network subnets | Apply required port rules before install (see Red Hat VNet NSG requirements) |
 | `windows-user-data` missing after WMCO install | WMCO failed to reconcile on deploy | Check WMCO operator pods, logs, and events — do not wait for a MachineSet |
+| Windows Machine fails to provision | MachineSet uses installer-default VNet/subnet names | Set `networkResourceGroup`, `vnet`, and `subnet` to pre-provisioned values from install-config |
 | MachineSet fails or VM name error | MachineSet name too long for Azure | MachineSet name must be **9 characters or fewer** |
 | Install timed out after DNS was fixed | Installer did not resume automatically | Run `openshift-install wait-for install-complete --dir . --log-level=info` |
 
@@ -156,7 +224,7 @@ oc get nodes -l node.openshift.io/os_id=Windows
 
 | File | Purpose |
 |------|---------|
-| [examples/install-config.snippet.yaml](./examples/install-config.snippet.yaml) | Guide-specific `install-config.yaml` fields |
+| [examples/install-config.snippet.yaml](./examples/install-config.snippet.yaml) | Guide-specific `install-config.yaml` fields including pre-provisioned VNet |
 | [examples/cluster-network-03-config.yml](./examples/cluster-network-03-config.yml) | Hybrid OVN-Kubernetes overlay manifest |
 | [wmco-subscription.yaml](./wmco-subscription.yaml) | WMCO OperatorGroup and Subscription |
 | [azure-machineset_windows_2022.yaml](./azure-machineset_windows_2022.yaml) | Windows Server 2022 MachineSet template |
