@@ -152,11 +152,48 @@ Note: To collect IPs using the Azure CLI, see [Provisioning your own DNS records
 3. Collect the public IP for the Ingress/routes endpoint (required for the OpenShift web console) from the same public load balancer, for the rule listening on port **443**. It may take about 10 minutes for this rule to appear.
 4. Add an A record for `*.apps.<cluster_name>.<base_domain>` pointing to the Ingress IP.
 
+Windows workers require an additional `api-int` record — see Phase 2.
+
 ## Phase 2: Deploy Windows worker nodes
 
 Note: The commands below assume your `oc` context is set to the installed cluster.
 
 Windows node bootstrap requires outbound connectivity from the **compute subnet** to the internet (or an approved egress path). WMCO installs OpenSSH on each Windows VM by downloading it from the **Microsoft Store** during node configuration. Restricted subnets without outbound access will cause Windows Machines to stall or fail during WMCO setup.
+
+Before applying a Windows MachineSet, create the `api-int` DNS record as described below. Windows worker bootstrap requires this record; Linux workers do not.
+
+### Create api-int DNS record for Windows workers
+
+Windows VMs resolve the internal Kubernetes API at `api-int.<cluster_name>.<base_domain>` using your **authoritative** hosted zone (the same zone as `api` and `*.apps`, not the dummy zone) until WMCO finishes configuring them as worker nodes. The record must point to the **private IP** of the internal load balancer (`${infra_id}-internal`), not the public API load balancer.
+
+1. In the cluster resource group, identify the internal load balancer named `${infra_id}-internal` (the load balancer whose name ends with `-internal`). Get `${infra_id}` from:
+
+   `oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}'`
+
+2. Collect the **private** IP from the load balancer rule listening on port **6443**.
+
+   Optional Azure CLI:
+
+```bash
+infra_id=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')
+cluster_resource_group_name="${infra_id}-rg"
+lb_name="${infra_id}-internal"
+
+az network lb rule list -g "${cluster_resource_group_name}" --lb-name "${lb_name}" \
+  --query "[?frontendPort==\`6443\`].{name:name, privateIP:frontendIpConfiguration.privateIpAddress}" -o table
+```
+
+3. In your authoritative hosted zone, add an **A record** for `api-int.<cluster_name>.<base_domain>` pointing to that private IP.
+
+4. Verify the record in your **authoritative DNS zone**.
+
+```bash
+dig +noall +answer @8.8.8.8 api-int.<cluster_name>.<base_domain>
+```
+
+   Confirm the returned A record IP matches the internal load balancer private IP from step 2.
+
+### Install WMCO and create a Windows MachineSet
 
 1. Deploy the Windows Machine Config Operator (WMCO): `oc apply -f ./wmco-subscription.yaml`
 2. Wait a few minutes for the operator deployment request to reconcile.
@@ -220,6 +257,7 @@ oc get nodes -l node.openshift.io/os_id=Windows
 | `windows-user-data` missing after WMCO install | WMCO failed to reconcile on deploy | Check WMCO operator pods, logs, and events — do not wait for a MachineSet |
 | Windows Machine fails to provision | MachineSet uses installer-default VNet/subnet names | Set `networkResourceGroup`, `vnet`, and `subnet` to pre-provisioned values from install-config |
 | Windows Machine stuck / node never Ready | Compute subnet blocks outbound internet | Allow egress from the compute subnet so WMCO can download OpenSSH from the Microsoft Store |
+| Windows Machine / node fails to join | Missing or wrong `api-int` DNS for Windows workers | Add A record for `api-int.<cluster>.<base_domain>` → private IP of `${infra_id}-internal` LB; verify with `dig @8.8.8.8 api-int...` — do not rely on resolution from a Linux worker node (cluster DNS) |
 | MachineSet fails or VM name error | MachineSet name too long for Azure | MachineSet name must be **9 characters or fewer** |
 | Install timed out after DNS was fixed | Installer did not resume automatically | Run `openshift-install wait-for install-complete --dir . --log-level=info` |
 
