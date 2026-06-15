@@ -222,12 +222,12 @@ dig +noall +answer @8.8.8.8 api-int.<cluster_name>.<base_domain>
 
    If the secret is missing, check the WMCO CSV, operator pods, and events.
 
-7. Create a Windows MachineSet using the template in this repo. The MachineSet name must be **9 characters or fewer** on Azure. Set network placeholders to match your backed-up `install-config.yaml` — **not** the installer-default `{infra_id}-vnet` / `{infra_id}-worker-subnet` names. Example for a MachineSet named `windows1` in `eastus` AZ `1`:
+7. Create a Windows MachineSet using the template in this repo. The MachineSet name must be **9 characters or fewer** on Azure. Set network placeholders to match your backed-up `install-config.yaml` — **not** the installer-default `{infra_id}-vnet` / `{infra_id}-worker-subnet` names. Example for a MachineSet named `win1` in `eastus` AZ `1`:
 
 ```bash
 cat ./azure-machineset_windows_2022.yaml | \
   sed "s/<infrastructure_id>/$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')/g" | \
-  sed "s/<windows_machine_set_name>/windows1/g" | \
+  sed "s/<windows_machine_set_name>/win1/g" | \
   sed "s/<location>/eastus/g" | \
   sed "s/<zone>/1/g" | \
   sed "s/<network_resource_group>/example-network-rg/g" | \
@@ -241,8 +241,8 @@ Replace `example-network-rg`, `example-vnet`, and `example-worker-subnet` with t
 8. Verify the MachineSet created a **Machine** resource. A Windows worker node will not appear immediately — bootstrapping takes time:
 
 ```bash
-oc get machineset windows1 -n openshift-machine-api
-oc get machines -n openshift-machine-api -l machine.openshift.io/cluster-api-machineset=windows1
+oc get machineset.machine win1 -n openshift-machine-api
+oc get machines.machine -n openshift-machine-api -l machine.openshift.io/cluster-api-machineset=win1
 ```
 
    Wait for the Machine to reach `Running` phase and for WMCO to finish configuring the VM before expecting a node.
