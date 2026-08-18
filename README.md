@@ -4,14 +4,16 @@
 
 Installer-provisioned infrastructure (IPI) on Azure normally assumes all resources deploy in the same subscription. This guide addresses two common enterprise constraints:
 
-- **DNS** is managed in a **different subscription** or **outside Azure** — use user-provisioned DNS (Tech Preview in OpenShift Container Platform **4.21+**).
+- **DNS** is managed in a **different subscription** or **outside Azure** — use user-provisioned DNS (generally available in OpenShift Container Platform **4.22**; Technology Preview in **4.21**).
 - **Networking** is pre-provisioned in a **separate resource group within the same subscription** where the installer creates cluster resources — the OpenShift installer consumes an existing VNet and subnets rather than creating them.
 
 The guide also covers the OVN-Kubernetes hybrid overlay configuration required to run **Linux and Windows worker nodes** in the same cluster. Windows workers are added post-install via WMCO and attach to the same pre-provisioned compute subnet as Linux workers.
 
+**Supported versions:** OpenShift Container Platform **4.22+** is recommended for user-provisioned DNS on Azure (GA). OpenShift Container Platform **4.21** supports the same workflow as Technology Preview and requires additional feature gates — see step 4 in Phase 1. For the GA announcement, see [OCP 4.22 release notes](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/release_notes/ocp-4-22-release-notes).
+
 Official references:
-- [Installing a cluster with customizations on Azure](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#installation-initializing_installing-azure-customizations)
-- [Reusing a VNet](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/installing_on_azure/installer-provisioned-infrastructure#installation-platform-azure-vnet_installing-azure-customizations)
+- [Installing a cluster with customizations on Azure](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/installing_on_azure/index#installation-initializing_installing-azure-customizations)
+- [Reusing a VNet](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-platform-azure-vnet_installing-azure-customizations)
 
 ## Architecture
 
@@ -64,7 +66,7 @@ flowchart TB
 6. Two subnets are available: one for the **control plane** (`controlPlaneSubnet`) and one for **compute/worker** nodes (`computeSubnet`). Windows workers use the compute subnet. The compute subnet (and its route table/NSG) must allow **outbound internet access** — WMCO downloads and installs the OpenSSH server from the Microsoft Store when configuring each Windows node.
 7. The VNet CIDR contains the `networking.machineNetwork` CIDR you will set in `install-config.yaml`.
 8. Subnets use Azure-assigned DHCP (not static IP assignments).
-9. Network security group rules for required cluster ports (6443, 443, 22623, etc.) are in place **before** installation. See the [VNet NSG requirements](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/installing_on_azure/installer-provisioned-infrastructure#installation-platform-azure-vnet_installing-azure-customizations).
+9. Network security group rules for required cluster ports (6443, 443, 22623, etc.) are in place **before** installation. See the [VNet NSG requirements](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-platform-azure-vnet_installing-azure-customizations).
 10. The Azure service principal used for installation can access both the **network resource group** and the resource groups where cluster and DNS resources are created.
 
 ## Phase 1: Install the cluster
@@ -73,19 +75,10 @@ The steps below assume the OpenShift installer is installed on the machine you w
 
 1. Create a new directory (avoid reusing an existing directory) to house the files required for installation of the cluster. e.g. `mkdir ocp-cluster; cd ocp-cluster`
 2. Generate the installation files: `openshift-install create install-config --dir .`. Follow the prompts and select the correct options for your deployment. When prompted, provide the network resource group, VNet, and subnet names from your pre-provisioned network landing zone. Make sure to remember the cluster name — you will need it to create DNS records.
-3. Open the newly created `install-config.yaml` file and configure replicas, `networking.machineNetwork`, and the pre-provisioned network fields under `platform.azure` (see step 5).
-4. To enable the user-managed Technology Preview capabilities of the installer, add the following as root-level attributes in `install-config.yaml`:
+3. Open the newly created `install-config.yaml` file and configure replicas, `networking.machineNetwork`, and the pre-provisioned network fields under `platform.azure` (see step 4).
+4. Under `platform.azure`, reference your pre-provisioned VNet and enable user-provisioned DNS. On OpenShift Container Platform **4.22+**, set `userProvisionedDNS: Enabled` — no feature gates are required. The guide-specific fields in `install-config.yaml` should look like this (adjust values for your environment; do not copy pull secrets or SSH keys from this example):
 
 ```yaml
-featureSet: CustomNoUpgrade
-featureGates: ["AzureClusterHostedDNSInstall=true"]
-```
-
-5. Under `platform.azure`, reference your pre-provisioned VNet and enable user-provisioned DNS. The guide-specific fields in `install-config.yaml` should look like this (adjust values for your environment; do not copy pull secrets or SSH keys from this example):
-
-```yaml
-featureSet: CustomNoUpgrade
-featureGates: ["AzureClusterHostedDNSInstall=true"]
 baseDomain: development.techcorp.com
 metadata:
   name: mycluster
@@ -111,13 +104,20 @@ Set `networking.machineNetwork` to an address range that fits within your VNet C
 
 See also: [examples/install-config.snippet.yaml](./examples/install-config.snippet.yaml)
 
-6. To run both Linux and Windows nodes in the same cluster, configure hybrid networking in OVN-Kubernetes. Generate installation manifests from `install-config.yaml`. This process will **consume** the `install-config.yaml` file, so back it up first. See the [hybrid OVN-Kubernetes documentation](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#configuring-hybrid-ovnkubernetes_installing-azure-customizations) for details.
+**OCP 4.21 only (Technology Preview):** If you install on OpenShift Container Platform **4.21**, add these root-level attributes in `install-config.yaml` in addition to the fields above. They are **not** required on **4.22+**:
 
-   6.1 Generate manifest files: `openshift-install create manifests --dir .`
+```yaml
+featureSet: CustomNoUpgrade
+featureGates: ["AzureClusterHostedDNSInstall=true"]
+```
 
-   6.2 Create the hybrid network manifest: `touch manifests/cluster-network-03-config.yml`
+5. To run both Linux and Windows nodes in the same cluster, configure hybrid networking in OVN-Kubernetes. Generate installation manifests from `install-config.yaml`. This process will **consume** the `install-config.yaml` file, so back it up first. See the [hybrid OVN-Kubernetes documentation](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/installing_on_azure/index#configuring-hybrid-ovnkubernetes_installing-azure-customizations) for details.
 
-   6.3 Edit the file and add the following content. Set `hybridClusterNetwork.cidr` to a range that **does not overlap** with `networking.clusterNetwork` in your backed-up `install-config.yaml`. For example, if `clusterNetwork` is `10.128.0.0/14`, use the next block such as `10.132.0.0/14`:
+   5.1 Generate manifest files: `openshift-install create manifests --dir .`
+
+   5.2 Create the hybrid network manifest: `touch manifests/cluster-network-03-config.yml`
+
+   5.3 Edit the file and add the following content. Set `hybridClusterNetwork.cidr` to a range that **does not overlap** with `networking.clusterNetwork` in your backed-up `install-config.yaml`. For example, if `clusterNetwork` is `10.128.0.0/14`, use the next block such as `10.132.0.0/14`:
 
 ```yaml
 apiVersion: operator.openshift.io/v1
@@ -137,15 +137,15 @@ spec:
 
    See also: [examples/cluster-network-03-config.yml](./examples/cluster-network-03-config.yml)
 
-   6.4 Save the changes and back up the file in case you need to recreate the cluster.
+   5.4 Save the changes and back up the file in case you need to recreate the cluster.
 
-   6.5 Deploy the cluster: `openshift-install create cluster --dir . --log-level=info`
+   5.5 Deploy the cluster: `openshift-install create cluster --dir . --log-level=info`
 
-   6.6 When user-managed DNS is enabled, cluster components can reach the control plane, but the installer host cannot resolve cluster-internal DNS. When you see `INFO Waiting up to 45m0s (until X:XX XX) for bootstrapping to complete`, update the **authoritative** hosted zone (not the dummy zone) as described below.
+   5.6 When user-provisioned DNS is enabled, cluster components can reach the control plane, but the installer host cannot resolve cluster-internal DNS. When you see `INFO Waiting up to 45m0s (until X:XX XX) for bootstrapping to complete`, update the **authoritative** hosted zone (not the dummy zone) as described below.
 
 ### Update authoritative DNS to complete installation
 
-Note: To collect IPs using the Azure CLI, see [Provisioning your own DNS records](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_azure/index#installation-azure-provisioning-own-dns-records_installing-azure-customizations).
+Note: To collect IPs using the Azure CLI, see [Provisioning your own DNS records](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/installing_on_azure/index#installation-azure-provisioning-own-dns-records_installing-azure-customizations).
 
 1. Collect the public IP for the API server from the public load balancer created by the installer — the load balancer whose name **does not** end with `-int`, for the rule listening on port **6443**.
 2. Add an A record for `api.<cluster_name>.<base_domain>` pointing to that IP.
@@ -261,6 +261,7 @@ oc get nodes -l node.openshift.io/os_id=Windows
 | Console unreachable | Missing `*.apps.*` DNS record | Wait for the port 443 load balancer rule (~10 min), then add the Ingress IP |
 | Install fails validating subnets | Wrong subnet names or network resource group | Verify `networkResourceGroupName`, `virtualNetwork`, `controlPlaneSubnet`, and `computeSubnet` in `install-config.yaml` |
 | Install fails on Azure API / NSG | Missing NSG rules on network subnets | Apply required port rules before install (see Red Hat VNet NSG requirements) |
+| Install fails validating `userProvisionedDNS` on OCP 4.21 | Feature gate not enabled | Add `featureSet: CustomNoUpgrade` and `featureGates: ["AzureClusterHostedDNSInstall=true"]` to `install-config.yaml` (4.21 only; not required on 4.22+) |
 | `windows-user-data` missing after WMCO install | WMCO failed to reconcile on deploy | Check WMCO operator pods, logs, and events — do not wait for a MachineSet |
 | Windows Machine fails to provision | MachineSet uses installer-default VNet/subnet names | Set `networkResourceGroup`, `vnet`, and `subnet` to pre-provisioned values from install-config |
 | Windows Machine stuck / node never Ready | Compute subnet blocks outbound internet | Allow egress from the compute subnet so WMCO can download OpenSSH from the Microsoft Store |

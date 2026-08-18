@@ -3,9 +3,13 @@
 # Generate a base file with: openshift-install create install-config --dir .
 #
 # networkResourceGroupName must not equal baseDomainResourceGroupName.
+#
+# OCP 4.21 only (Technology Preview): also add these root-level attributes before
+# the fields below. Not required on OCP 4.22+ when user-provisioned DNS is GA:
+#
+# featureSet: CustomNoUpgrade
+# featureGates: ["AzureClusterHostedDNSInstall=true"]
 
-featureSet: CustomNoUpgrade
-featureGates: ["AzureClusterHostedDNSInstall=true"]
 baseDomain: development.techcorp.com
 metadata:
   name: mycluster
