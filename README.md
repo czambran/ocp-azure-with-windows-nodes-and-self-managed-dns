@@ -226,8 +226,6 @@ fi
 
    See also: [examples/ccoctl-azure-create-all.example.sh](./examples/ccoctl-azure-create-all.example.sh)
 
-   5.5 Confirm `platform.azure.resourceGroupName` in `install-config.yaml` still matches the `--name` value used in step 5.4 before you run `openshift-install create manifests`.
-
 6. To run both Linux and Windows nodes in the same cluster, configure hybrid networking in OVN-Kubernetes. Generate installation manifests from `install-config.yaml`. This process will **consume** the `install-config.yaml` file, so back it up first. See the [hybrid OVN-Kubernetes documentation](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/installing_on_azure/index#configuring-hybrid-ovnkubernetes_installing-azure-customizations) for details.
 
    6.1 Generate manifest files: `openshift-install create manifests --dir .`
