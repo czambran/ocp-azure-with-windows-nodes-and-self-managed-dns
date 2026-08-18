@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Create Azure resources for Microsoft Entra Workload ID (short-term credentials).
 # Run from your installation directory after extract-ccoctl.example.sh.
+# Configure Azure credentials first — see docs/azure-install-identity.md
 # Usage: ./examples/ccoctl-azure-create-all.example.sh [installation_directory]
 
 set -euo pipefail
@@ -25,12 +26,7 @@ if [[ ! -f "${INSTALL_CONFIG}" ]]; then
 fi
 
 if ! command -v az >/dev/null 2>&1; then
-  echo "Azure CLI (az) is required. Install it and run az login first." >&2
-  exit 1
-fi
-
-if ! az account show >/dev/null 2>&1; then
-  echo "Run az login before create-all." >&2
+  echo "Azure CLI (az) is required. See docs/azure-install-identity.md." >&2
   exit 1
 fi
 
@@ -45,9 +41,22 @@ if [[ -z "${INFRA_NAME}" || "${INFRA_NAME}" == "null" ]]; then
   exit 1
 fi
 
-# Prefer az login user over VM managed identity (Azure VM bastions)
-unset AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID AZURE_FEDERATED_TOKEN_FILE
-export AZURE_TOKEN_CREDENTIALS=AzureCLICredential
+# Credential selection — see docs/azure-install-identity.md
+if [[ -n "${AZURE_CLIENT_ID:-}" && -n "${AZURE_CLIENT_SECRET:-}" ]]; then
+  unset AZURE_TOKEN_CREDENTIALS
+  export AZURE_TENANT_ID="${AZURE_TENANT_ID:-$(az account show --query tenantId -o tsv 2>/dev/null || true)}"
+  if ! az account show >/dev/null 2>&1; then
+    echo "Run az login --service-principal or configure az session. See docs/azure-install-identity.md." >&2
+    exit 1
+  fi
+else
+  unset AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_FEDERATED_TOKEN_FILE AZURE_AUTHORITY_HOST
+  export AZURE_TOKEN_CREDENTIALS=AzureCLICredential
+  if ! az account show >/dev/null 2>&1; then
+    echo "Run az login or export service principal env vars. See docs/azure-install-identity.md." >&2
+    exit 1
+  fi
+fi
 
 TENANT_ID="$(az account show --query tenantId -o tsv)"
 SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
