@@ -2,10 +2,11 @@
 
 ## Overview
 
-Installer-provisioned infrastructure (IPI) on Azure normally assumes all resources deploy in the same subscription. This guide addresses two common enterprise constraints:
+Installer-provisioned infrastructure (IPI) on Azure normally assumes all resources deploy in the same subscription. This guide addresses three common enterprise constraints:
 
 - **DNS** is managed in a **different subscription** or **outside Azure** — use user-provisioned DNS (generally available in OpenShift Container Platform **4.22**; Technology Preview in **4.21**).
 - **Networking** is pre-provisioned in a **separate resource group within the same subscription** where the installer creates cluster resources — the OpenShift installer consumes an existing VNet and subnets rather than creating them.
+- **Credentials** must use **Microsoft Entra Workload ID** with short-term credentials — cluster components authenticate via user-assigned managed identities created by `ccoctl`, not long-lived service principal secrets in `kube-system`.
 
 The guide also covers the OVN-Kubernetes hybrid overlay configuration required to run **Linux and Windows worker nodes** in the same cluster. Windows workers are added post-install via WMCO and attach to the same pre-provisioned compute subnet as Linux workers.
 
@@ -14,6 +15,8 @@ The guide also covers the OVN-Kubernetes hybrid overlay configuration required t
 Official references:
 - [Installing a cluster with customizations on Azure](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/installing_on_azure/index#installation-initializing_installing-azure-customizations)
 - [Reusing a VNet](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-platform-azure-vnet_installing-azure-customizations)
+- [Configuring an Azure cluster to use short-term credentials](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#cco-short-term-credentials_installing-azure-customizations)
+- [Manual mode with short-term credentials (Microsoft Entra Workload ID)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/managing-cloud-provider-credentials#cco-short-term-creds_managing-cloud-provider-credentials)
 
 ## Architecture
 
@@ -24,6 +27,10 @@ flowchart TB
       VNet[Existing VNet]
       CPSubnet[controlPlaneSubnet]
       WorkerSubnet[computeSubnet]
+    end
+    subgraph installRG [Install resource group ccoctl]
+      ManagedIds[User-assigned managed identities]
+      OIDCStorage[OIDC config storage]
     end
     subgraph clusterRG [Cluster resource group]
       ControlPlane[Control plane VMs]
@@ -40,8 +47,11 @@ flowchart TB
   subgraph dnsElsewhere [DNS subscription or external]
     AuthZone[Authoritative DNS zone]
   end
+  ccoctl[ccoctl create-all] --> installRG
+  ccoctl --> ManagedIds
   Installer[openshift-install] --> VNet
   Installer --> clusterRG
+  ManagedIds --> clusterRG
   ControlPlane --> CPSubnet
   LinuxWorkers --> WorkerSubnet
   WinWorkers --> WorkerSubnet
@@ -51,23 +61,25 @@ flowchart TB
   LB --> AuthZone
 ```
 
-- **Network resource group (same subscription):** pre-provisioned VNet, control plane subnet, and compute subnet. All cluster and Windows worker NICs attach to subnets here.
-- **Cluster resource group (same subscription):** control plane VMs, Linux workers, Windows workers (via WMCO), load balancers, disks, and identities — created by the installer.
-- **Dummy DNS resource group (same subscription):** empty DNS zone required by the installer when using user-provisioned DNS. No customer-facing records are added here.
+- **Install resource group (`resourceGroupName` / `ccoctl --name`):** empty resource group created by `ccoctl` before installation. Scoped permissions for managed identities and OIDC configuration. Must match `platform.azure.resourceGroupName` in `install-config.yaml`. At runtime the installer creates `{infra_id}-rg` inside this scope for cluster VMs, load balancers, and disks.
+- **Network resource group (same subscription):** pre-provisioned VNet, control plane subnet, and compute subnet. All cluster and Windows worker NICs attach to subnets here (`networkResourceGroupName`).
+- **Dummy DNS resource group (same subscription):** empty DNS zone required by the installer when using user-provisioned DNS (`baseDomainResourceGroupName`). Also passed to `ccoctl` as `--dnszone-resource-group-name`. No customer-facing records are added here.
 - **DNS subscription (or external DNS):** authoritative `api` and `*.apps` records customers use to reach the cluster.
 
 ## Prerequisites
 
-1. The OpenShift installer is installed on the machine used to run installation commands.
-2. (Optional: Only needed when generating the install-config.yaml through the installer propmpts) A dummy public DNS hosted zone for the desired base domain (e.g. `development.techcorp.com`) exists in the subscription where cluster resources will be deployed. No records are added to this zone — it satisfies the installer only.
-3. The `oc` CLI is installed (required after cluster installation for Windows node steps).
-4. The cluster name in `install-config.yaml` must **not** contain `windows`, `microsoft`, or similar words (Azure identity naming restriction).
-5. A VNet and subnets exist in a **network resource group** in the same subscription used for cluster installation.
-6. Two subnets are available: one for the **control plane** (`controlPlaneSubnet`) and one for **compute/worker** nodes (`computeSubnet`). Windows workers use the compute subnet. The compute subnet (and its route table/NSG) must allow **outbound internet access** — WMCO downloads and installs the OpenSSH server from the Microsoft Store when configuring each Windows node.
-7. The VNet CIDR contains the `networking.machineNetwork` CIDR you will set in `install-config.yaml`.
-8. Subnets use Azure-assigned DHCP (not static IP assignments).
-9. Network security group rules for required cluster ports (6443, 443, 22623, etc.) are in place **before** installation. See the [VNet NSG requirements](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-platform-azure-vnet_installing-azure-customizations).
-10. The Azure service principal used for installation can access both the **network resource group** and the resource groups where cluster and DNS resources are created.
+1. The OpenShift installer and `oc` CLI are installed on the machine used to run installation commands.
+2. The Azure CLI is installed. You can authenticate with `az login` or environment variables (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET`) when running `ccoctl`.
+3. (Optional: Only needed when generating the install-config.yaml through the installer prompts) A dummy public DNS hosted zone for the desired base domain (e.g. `development.techcorp.com`) exists in the subscription where cluster resources will be deployed. No records are added to this zone — it satisfies the installer only.
+4. The cluster name in `install-config.yaml` and the `ccoctl --name` value must **not** contain `windows`, `microsoft`, or similar words (Azure identity naming restriction). The `ccoctl --name` value must be **9 characters or fewer** if it becomes the Azure resource prefix.
+5. A chosen **infra name** for `ccoctl azure create-all --name` (e.g. `demo1rg`). `ccoctl` creates an **empty** resource group with this name; it becomes `platform.azure.resourceGroupName` in `install-config.yaml`.
+6. A VNet and subnets exist in a **network resource group** in the same subscription used for cluster installation.
+7. Two subnets are available: one for the **control plane** (`controlPlaneSubnet`) and one for **compute/worker** nodes (`computeSubnet`). Windows workers use the compute subnet. The compute subnet (and its route table/NSG) must allow **outbound internet access** — WMCO downloads and installs the OpenSSH server from the Microsoft Store when configuring each Windows node.
+8. The VNet CIDR contains the `networking.machineNetwork` CIDR you will set in `install-config.yaml`.
+9. Subnets use Azure-assigned DHCP (not static IP assignments).
+10. Network security group rules for required cluster ports (6443, 443, 22623, etc.) are in place **before** installation. See the [VNet NSG requirements](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-platform-azure-vnet_installing-azure-customizations).
+11. The Azure account used for `ccoctl` and installation has permissions to create resource groups, storage accounts, user-assigned managed identities, and role assignments in the subscription. See [Azure permissions for installer-provisioned infrastructure](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-azure-permissions_installing-azure-customizations).
+12. `credentialsMode: Manual` is set in `install-config.yaml` — this guide uses Microsoft Entra Workload ID with short-term credentials, not mint or passthrough mode.
 
 ## Phase 1: Install the cluster
 
@@ -75,10 +87,11 @@ The steps below assume the OpenShift installer is installed on the machine you w
 
 1. Create a new directory (avoid reusing an existing directory) to house the files required for installation of the cluster. e.g. `mkdir ocp-cluster; cd ocp-cluster`
 2. Generate the installation files: `openshift-install create install-config --dir .`. Follow the prompts and select the correct options for your deployment. When prompted, provide the network resource group, VNet, and subnet names from your pre-provisioned network landing zone. Make sure to remember the cluster name — you will need it to create DNS records.
-3. Open the newly created `install-config.yaml` file and configure replicas, `networking.machineNetwork`, and the pre-provisioned network fields under `platform.azure` (see step 4).
-4. Under `platform.azure`, reference your pre-provisioned VNet and enable user-provisioned DNS. On OpenShift Container Platform **4.22+**, set `userProvisionedDNS: Enabled` — no feature gates are required. The guide-specific fields in `install-config.yaml` should look like this (adjust values for your environment; do not copy pull secrets or SSH keys from this example):
+3. Open the newly created `install-config.yaml` file and configure replicas, `networking.machineNetwork`, `credentialsMode: Manual`, and the pre-provisioned network fields under `platform.azure` (see step 4).
+4. Under `platform.azure`, reference your pre-provisioned VNet, enable user-provisioned DNS, and set `credentialsMode: Manual` for Microsoft Entra Workload ID. On OpenShift Container Platform **4.22+**, set `userProvisionedDNS: Enabled` — no feature gates are required. The guide-specific fields in `install-config.yaml` should look like this (adjust values for your environment; do not copy pull secrets or SSH keys from this example). Add `resourceGroupName` after step 5 — it must match `ccoctl --name`:
 
 ```yaml
+credentialsMode: Manual
 baseDomain: development.techcorp.com
 metadata:
   name: mycluster
@@ -92,6 +105,7 @@ networking:
 platform:
   azure:
     region: eastus
+    resourceGroupName: demo1rg
     baseDomainResourceGroupName: dummy-dns-rg
     networkResourceGroupName: example-network-rg
     virtualNetwork: example-vnet
@@ -111,13 +125,72 @@ featureSet: CustomNoUpgrade
 featureGates: ["AzureClusterHostedDNSInstall=true"]
 ```
 
-5. To run both Linux and Windows nodes in the same cluster, configure hybrid networking in OVN-Kubernetes. Generate installation manifests from `install-config.yaml`. This process will **consume** the `install-config.yaml` file, so back it up first. See the [hybrid OVN-Kubernetes documentation](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/installing_on_azure/index#configuring-hybrid-ovnkubernetes_installing-azure-customizations) for details.
+5. Configure Azure Workload Identities with short-term credentials using `ccoctl`. This creates user-assigned managed identities, OIDC configuration storage, and credential manifests for cluster components.
 
-   5.1 Generate manifest files: `openshift-install create manifests --dir .`
+   5.1 Extract `ccoctl` from the release image:
 
-   5.2 Create the hybrid network manifest: `touch manifests/cluster-network-03-config.yml`
+```bash
+RELEASE_IMAGE=$(openshift-install version | awk '/release image/ {print $3}')
+oc adm release extract --command=ccoctl "${RELEASE_IMAGE}" -a pull-secret
+chmod 775 ccoctl
+```
 
-   5.3 Edit the file and add the following content. Set `hybridClusterNetwork.cidr` to a range that **does not overlap** with `networking.clusterNetwork` in your backed-up `install-config.yaml`. For example, if `clusterNetwork` is `10.128.0.0/14`, use the next block such as `10.132.0.0/14`:
+   On RHEL 9 hosts, use `--command=ccoctl.rhel9` if the default binary does not run.
+
+   See also: [examples/extract-ccoctl.example.sh](./examples/extract-ccoctl.example.sh)
+
+   5.2 Extract `CredentialsRequest` objects filtered for your `install-config.yaml`:
+
+```bash
+oc adm release extract --from="${RELEASE_IMAGE}" \
+  --credentials-requests --included \
+  --install-config=./install-config.yaml \
+  --to=./credrequests \
+  -a pull-secret
+```
+
+   5.3 Log in to Azure so `ccoctl` can detect credentials:
+
+   `az login`
+
+   5.4 Create Azure resources and credential manifests with `ccoctl azure create-all`. Map `--dnszone-resource-group-name` to `baseDomainResourceGroupName` and `--network-resource-group-name` to `networkResourceGroupName` from your `install-config.yaml`:
+
+```bash
+TENANT_ID=$(az account show --query tenantId -o tsv)
+SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+
+./ccoctl azure create-all \
+  --name=demo1rg \
+  --output-dir=./ccoctl-output \
+  --region=eastus \
+  --subscription-id="${SUBSCRIPTION_ID}" \
+  --tenant-id="${TENANT_ID}" \
+  --credentials-requests-dir=./credrequests \
+  --dnszone-resource-group-name=dummy-dns-rg \
+  --network-resource-group-name=example-network-rg \
+  --preserve-existing-roles
+```
+
+   The `--name` value must match `platform.azure.resourceGroupName` in `install-config.yaml`. On OCP 4.21 Technology Preview installs, add `--enable-tech-preview`.
+
+   See also: [examples/ccoctl-azure-create-all.example.sh](./examples/ccoctl-azure-create-all.example.sh)
+
+   5.5 Add `platform.azure.resourceGroupName: demo1rg` to `install-config.yaml` if not already set — it must match the `--name` argument from step 5.4.
+
+6. To run both Linux and Windows nodes in the same cluster, configure hybrid networking in OVN-Kubernetes. Generate installation manifests from `install-config.yaml`. This process will **consume** the `install-config.yaml` file, so back it up first. See the [hybrid OVN-Kubernetes documentation](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/installing_on_azure/index#configuring-hybrid-ovnkubernetes_installing-azure-customizations) for details.
+
+   6.1 Generate manifest files: `openshift-install create manifests --dir .`
+
+   6.2 Copy Workload Identity manifests and TLS signing keys from `ccoctl` output:
+
+```bash
+cp ccoctl-output/manifests/* ./manifests/
+cp -a ccoctl-output/tls .
+```
+
+   6.3 Create the hybrid network manifest: `touch manifests/cluster-network-03-config.yml`
+
+   6.4 Edit the file and add the following content. Set `hybridClusterNetwork.cidr` to a range that **does not overlap** with `networking.clusterNetwork` in your backed-up `install-config.yaml`. For example, if `clusterNetwork` is `10.128.0.0/14`, use the next block such as `10.132.0.0/14`:
 
 ```yaml
 apiVersion: operator.openshift.io/v1
@@ -137,11 +210,11 @@ spec:
 
    See also: [examples/cluster-network-03-config.yml](./examples/cluster-network-03-config.yml)
 
-   5.4 Save the changes and back up the file in case you need to recreate the cluster.
+   6.5 Save the changes and back up the file in case you need to recreate the cluster.
 
-   5.5 Deploy the cluster: `openshift-install create cluster --dir . --log-level=info`
+   6.6 Deploy the cluster: `openshift-install create cluster --dir . --log-level=info`
 
-   5.6 When user-provisioned DNS is enabled, cluster components can reach the control plane, but the installer host cannot resolve cluster-internal DNS. When you see `INFO Waiting up to 45m0s (until X:XX XX) for bootstrapping to complete`, update the **authoritative** hosted zone (not the dummy zone) as described below.
+   6.7 When user-provisioned DNS is enabled, cluster components can reach the control plane, but the installer host cannot resolve cluster-internal DNS. When you see `INFO Waiting up to 45m0s (until X:XX XX) for bootstrapping to complete`, update the **authoritative** hosted zone (not the dummy zone) as described below.
 
 ### Update authoritative DNS to complete installation
 
@@ -261,6 +334,10 @@ oc get nodes -l node.openshift.io/os_id=Windows
 | Console unreachable | Missing `*.apps.*` DNS record | Wait for the port 443 load balancer rule (~10 min), then add the Ingress IP |
 | Install fails validating subnets | Wrong subnet names or network resource group | Verify `networkResourceGroupName`, `virtualNetwork`, `controlPlaneSubnet`, and `computeSubnet` in `install-config.yaml` |
 | Install fails on Azure API / NSG | Missing NSG rules on network subnets | Apply required port rules before install (see Red Hat VNet NSG requirements) |
+| `ccoctl azure create-all` fails on DNS zone RG | Missing or wrong `--dnszone-resource-group-name` | Set to `platform.azure.baseDomainResourceGroupName` (dummy DNS RG) |
+| Install fails on resource group | `resourceGroupName` ≠ `ccoctl --name` or RG not empty | Align names; use a new empty resource group created by `ccoctl` |
+| Components lack Azure permissions after install | `ccoctl` manifests or `tls` not copied | Run `cp ccoctl-output/manifests/* ./manifests/` and `cp -a ccoctl-output/tls .` before `create cluster` |
+| `ccoctl` fails to run | Wrong binary architecture or not extracted | Re-extract with `--command=ccoctl.rhel9` on RHEL 9 hosts |
 | Install fails validating `userProvisionedDNS` on OCP 4.21 | Feature gate not enabled | Add `featureSet: CustomNoUpgrade` and `featureGates: ["AzureClusterHostedDNSInstall=true"]` to `install-config.yaml` (4.21 only; not required on 4.22+) |
 | `windows-user-data` missing after WMCO install | WMCO failed to reconcile on deploy | Check WMCO operator pods, logs, and events — do not wait for a MachineSet |
 | Windows Machine fails to provision | MachineSet uses installer-default VNet/subnet names | Set `networkResourceGroup`, `vnet`, and `subnet` to pre-provisioned values from install-config |
@@ -273,7 +350,9 @@ oc get nodes -l node.openshift.io/os_id=Windows
 
 | File | Purpose |
 |------|---------|
-| [examples/install-config.snippet.yaml](./examples/install-config.snippet.yaml) | Guide-specific `install-config.yaml` fields including pre-provisioned VNet |
+| [examples/install-config.snippet.yaml](./examples/install-config.snippet.yaml) | Guide-specific `install-config.yaml` fields including Manual mode, pre-provisioned VNet, and Workload Identity resource group |
+| [examples/extract-ccoctl.example.sh](./examples/extract-ccoctl.example.sh) | Extract `ccoctl` and `CredentialsRequest` objects from the release image |
+| [examples/ccoctl-azure-create-all.example.sh](./examples/ccoctl-azure-create-all.example.sh) | Run `ccoctl azure create-all` with guide-specific parameters |
 | [examples/cluster-network-03-config.yml](./examples/cluster-network-03-config.yml) | Hybrid OVN-Kubernetes overlay manifest |
 | [wmco-subscription.yaml](./wmco-subscription.yaml) | WMCO OperatorGroup and Subscription |
 | [azure-machineset_windows_2022.yaml](./azure-machineset_windows_2022.yaml) | Windows Server 2022 MachineSet template |
