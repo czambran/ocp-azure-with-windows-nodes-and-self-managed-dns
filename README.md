@@ -90,7 +90,7 @@ The steps below assume the OpenShift installer is installed on the machine you w
 1. Create a new directory (avoid reusing an existing directory) to house the files required for installation of the cluster. e.g. `mkdir ocp-cluster; cd ocp-cluster`
 2. Generate the installation files: `openshift-install create install-config --dir .`. Follow the prompts and select the correct options for your deployment. When prompted, provide the network resource group, VNet, and subnet names from your pre-provisioned network landing zone. Make sure to remember the cluster name — you will need it to create DNS records.
 3. Open the newly created `install-config.yaml` file and configure replicas, `networking.machineNetwork`, `credentialsMode: Manual`, and the pre-provisioned network fields under `platform.azure` (see step 4).
-4. Under `platform.azure`, reference your pre-provisioned VNet, enable user-provisioned DNS, and configure Microsoft Entra Workload ID. This guide requires `credentialsMode: Manual` in `install-config.yaml` (short-term credentials via `ccoctl`, not mint or passthrough mode). On OpenShift Container Platform **4.22+**, set `userProvisionedDNS: Enabled` — no feature gates are required. The guide-specific fields in `install-config.yaml` should look like this (adjust values for your environment; do not copy pull secrets or SSH keys from this example). Add `resourceGroupName` after step 5 — it must match `ccoctl --name`:
+4. Under `platform.azure`, reference your pre-provisioned VNet, enable user-provisioned DNS, and configure Microsoft Entra Workload ID. This guide requires `credentialsMode: Manual` in `install-config.yaml` (short-term credentials via `ccoctl`, not mint or passthrough mode). On OpenShift Container Platform **4.22+**, set `userProvisionedDNS: Enabled` — no feature gates are required. Set `platform.azure.resourceGroupName` to your chosen infra name (prerequisite 6) — it must match the `ccoctl azure create-all --name` value in step 5.4. The guide-specific fields in `install-config.yaml` should look like this (adjust values for your environment; do not copy pull secrets or SSH keys from this example):
 
 ```yaml
 credentialsMode: Manual
@@ -190,7 +190,9 @@ export AZURE_TENANT_ID="<tenant_guid>"
 unset AZURE_TOKEN_CREDENTIALS
 ```
 
-   5.4 Create Azure resources and credential manifests with `ccoctl azure create-all`. Keep `AZURE_TOKEN_CREDENTIALS=AzureCLICredential` set in the same shell session. Map `--dnszone-resource-group-name` to `baseDomainResourceGroupName` and `--network-resource-group-name` to `networkResourceGroupName` from your `install-config.yaml`:
+   5.4 Create Azure resources and credential manifests with `ccoctl azure create-all`. Keep `AZURE_TOKEN_CREDENTIALS=AzureCLICredential` set in the same shell session.
+
+   The `--name` argument must **exactly match** `platform.azure.resourceGroupName` in `install-config.yaml`. `ccoctl` creates an empty resource group with that name; the installer deploys cluster resources into it. Prefer reading values from `install-config.yaml` rather than hardcoding them:
 
 ```bash
 export AZURE_TOKEN_CREDENTIALS=AzureCLICredential
@@ -198,23 +200,33 @@ export AZURE_TOKEN_CREDENTIALS=AzureCLICredential
 TENANT_ID=$(az account show --query tenantId -o tsv)
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 
+INFRA_NAME=$(yq -r '.platform.azure.resourceGroupName' install-config.yaml)
+REGION=$(yq -r '.platform.azure.region' install-config.yaml)
+DNS_ZONE_RG=$(yq -r '.platform.azure.baseDomainResourceGroupName' install-config.yaml)
+NETWORK_RG=$(yq -r '.platform.azure.networkResourceGroupName' install-config.yaml)
+
+if [[ -z "${INFRA_NAME}" || "${INFRA_NAME}" == "null" ]]; then
+  echo "Set platform.azure.resourceGroupName in install-config.yaml before running create-all." >&2
+  exit 1
+fi
+
 ./ccoctl azure create-all \
-  --name=demo1rg \
+  --name="${INFRA_NAME}" \
   --output-dir=./ccoctl-output \
-  --region=eastus \
+  --region="${REGION}" \
   --subscription-id="${SUBSCRIPTION_ID}" \
   --tenant-id="${TENANT_ID}" \
   --credentials-requests-dir=./credrequests \
-  --dnszone-resource-group-name=dummy-dns-rg \
-  --network-resource-group-name=example-network-rg \
+  --dnszone-resource-group-name="${DNS_ZONE_RG}" \
+  --network-resource-group-name="${NETWORK_RG}" \
   --preserve-existing-roles
 ```
 
-   The `--name` value must match `platform.azure.resourceGroupName` in `install-config.yaml`. On OCP 4.21 Technology Preview installs, add `--enable-tech-preview`.
+   Requires [yq](https://github.com/mikefarah/yq) to parse `install-config.yaml`. On OCP 4.21 Technology Preview installs, add `--enable-tech-preview`.
 
    See also: [examples/ccoctl-azure-create-all.example.sh](./examples/ccoctl-azure-create-all.example.sh)
 
-   5.5 Add `platform.azure.resourceGroupName: demo1rg` to `install-config.yaml` if not already set — it must match the `--name` argument from step 5.4.
+   5.5 Confirm `platform.azure.resourceGroupName` in `install-config.yaml` still matches the `--name` value used in step 5.4 before you run `openshift-install create manifests`.
 
 6. To run both Linux and Windows nodes in the same cluster, configure hybrid networking in OVN-Kubernetes. Generate installation manifests from `install-config.yaml`. This process will **consume** the `install-config.yaml` file, so back it up first. See the [hybrid OVN-Kubernetes documentation](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/installing_on_azure/index#configuring-hybrid-ovnkubernetes_installing-azure-customizations) for details.
 

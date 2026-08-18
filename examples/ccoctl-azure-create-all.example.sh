@@ -6,18 +6,23 @@
 set -euo pipefail
 
 INSTALL_DIR="${1:-.}"
-
-# --- Adjust these values for your environment ---
-INFRA_NAME="${INFRA_NAME:-demo1rg}"
-REGION="${REGION:-eastus}"
-DNS_ZONE_RG="${DNS_ZONE_RG:-dummy-dns-rg}"
-NETWORK_RG="${NETWORK_RG:-example-network-rg}"
+INSTALL_CONFIG="${INSTALL_CONFIG:-install-config.yaml}"
 OUTPUT_DIR="${OUTPUT_DIR:-./ccoctl-output}"
 CREDREQUESTS_DIR="${CREDREQUESTS_DIR:-./credrequests}"
 # Set ENABLE_TECH_PREVIEW=1 for OCP 4.21 Technology Preview installs only.
 ENABLE_TECH_PREVIEW="${ENABLE_TECH_PREVIEW:-0}"
 
 cd "${INSTALL_DIR}"
+
+if ! command -v yq >/dev/null 2>&1; then
+  echo "yq is required to read values from ${INSTALL_CONFIG}." >&2
+  exit 1
+fi
+
+if [[ ! -f "${INSTALL_CONFIG}" ]]; then
+  echo "Missing ${INSTALL_CONFIG}. Create and configure it before running create-all." >&2
+  exit 1
+fi
 
 if ! command -v az >/dev/null 2>&1; then
   echo "Azure CLI (az) is required. Install it and run az login first." >&2
@@ -26,6 +31,17 @@ fi
 
 if ! az account show >/dev/null 2>&1; then
   echo "Run az login before create-all." >&2
+  exit 1
+fi
+
+# Read from install-config.yaml; env vars override when set.
+INFRA_NAME="${INFRA_NAME:-$(yq -r '.platform.azure.resourceGroupName' "${INSTALL_CONFIG}")}"
+REGION="${REGION:-$(yq -r '.platform.azure.region' "${INSTALL_CONFIG}")}"
+DNS_ZONE_RG="${DNS_ZONE_RG:-$(yq -r '.platform.azure.baseDomainResourceGroupName' "${INSTALL_CONFIG}")}"
+NETWORK_RG="${NETWORK_RG:-$(yq -r '.platform.azure.networkResourceGroupName' "${INSTALL_CONFIG}")}"
+
+if [[ -z "${INFRA_NAME}" || "${INFRA_NAME}" == "null" ]]; then
+  echo "Set platform.azure.resourceGroupName in ${INSTALL_CONFIG} before running create-all." >&2
   exit 1
 fi
 
@@ -53,5 +69,5 @@ fi
   --preserve-existing-roles \
   "${EXTRA_ARGS[@]}"
 
-echo "Add platform.azure.resourceGroupName: ${INFRA_NAME} to install-config.yaml before openshift-install create manifests"
-echo "Then copy ${OUTPUT_DIR}/manifests/* to ./manifests/ and cp -a ${OUTPUT_DIR}/tls ."
+echo "Confirmed --name=${INFRA_NAME} matches platform.azure.resourceGroupName in ${INSTALL_CONFIG}"
+echo "Copy ${OUTPUT_DIR}/manifests/* to ./manifests/ and cp -a ${OUTPUT_DIR}/tls . before openshift-install create manifests"
