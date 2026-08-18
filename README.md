@@ -321,22 +321,31 @@ dig +noall +answer @8.8.8.8 api-int.<cluster_name>.<base_domain>
 
    If the secret is missing, check the WMCO CSV, operator pods, and events.
 
-7. Create a Windows Server 2025 MachineSet using [azure-machineset_windows_2025.yaml](./azure-machineset_windows_2025.yaml). The MachineSet name must be **9 characters or fewer** on Azure. Set network placeholders to match your backed-up `install-config.yaml` — **not** the installer-default `{infra_id}-vnet` / `{infra_id}-worker-subnet` names. The template uses SKU `2025-datacenter-smalldisk`. Container workloads on Windows Server 2025 nodes must use matching base images (for example `ltsc2025` tags and the `windows2025` RuntimeClass — see [OCP Windows Container Support](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/windows_container_support_for_openshift/index)). Example for a MachineSet named `win1` in `eastus` AZ `1`:
+7. Create a Windows Server 2025 MachineSet using [azure-machineset_windows_2025.yaml](./azure-machineset_windows_2025.yaml). The MachineSet name must be **9 characters or fewer** on Azure. Network placeholders can be read from the cluster — `networkResourceGroup`, `vnet`, and `subnet` from an existing Linux worker MachineSet; `cluster_resource_group` from Infrastructure status. The template uses SKU `2025-datacenter-smalldisk`. Container workloads on Windows Server 2025 nodes must use matching base images (for example `ltsc2025` tags and the `windows2025` RuntimeClass — see [OCP Windows Container Support](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/windows_container_support_for_openshift/index)). Example for a MachineSet named `win1` in the same region and zone as an existing Linux worker MachineSet:
 
 ```bash
+infra_id=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')
+worker_ms=$(oc get machineset -n openshift-machine-api -l machine.openshift.io/cluster-api-machine-role=worker -o jsonpath='{.items[0].metadata.name}')
+cluster_rg=$(oc get infrastructure cluster -o jsonpath='{.status.platformStatus.azure.resourceGroupName}')
+network_rg=$(oc -n openshift-machine-api get machineset "${worker_ms}" -o jsonpath='{.spec.template.spec.providerSpec.value.networkResourceGroup}')
+vnet=$(oc -n openshift-machine-api get machineset "${worker_ms}" -o jsonpath='{.spec.template.spec.providerSpec.value.vnet}')
+subnet=$(oc -n openshift-machine-api get machineset "${worker_ms}" -o jsonpath='{.spec.template.spec.providerSpec.value.subnet}')
+location=$(oc -n openshift-machine-api get machineset "${worker_ms}" -o jsonpath='{.spec.template.spec.providerSpec.value.location}')
+zone=$(oc -n openshift-machine-api get machineset "${worker_ms}" -o jsonpath='{.spec.template.spec.providerSpec.value.zone}')
+
 cat ./azure-machineset_windows_2025.yaml | \
-  sed "s/<infrastructure_id>/$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')/g" | \
-  sed "s/<cluster_resource_group>/$(oc get infrastructure cluster -o jsonpath='{.status.platformStatus.azure.resourceGroupName}')/g" | \
+  sed "s/<infrastructure_id>/${infra_id}/g" | \
+  sed "s/<cluster_resource_group>/${cluster_rg}/g" | \
   sed "s/<windows_machine_set_name>/win1/g" | \
-  sed "s/<location>/eastus/g" | \
-  sed "s/<zone>/1/g" | \
-  sed "s/<network_resource_group>/example-network-rg/g" | \
-  sed "s/<vnet_name>/example-vnet/g" | \
-  sed "s/<compute_subnet>/example-worker-subnet/g" | \
+  sed "s/<location>/${location}/g" | \
+  sed "s/<zone>/${zone}/g" | \
+  sed "s/<network_resource_group>/${network_rg}/g" | \
+  sed "s/<vnet_name>/${vnet}/g" | \
+  sed "s/<compute_subnet>/${subnet}/g" | \
   oc apply -f -
 ```
 
-Replace `example-network-rg`, `example-vnet`, and `example-worker-subnet` with the values from `platform.azure.networkResourceGroupName`, `platform.azure.virtualNetwork`, and `platform.azure.computeSubnet` in your install-config backup. The `cluster_resource_group` sed value matches `platform.azure.resourceGroupName` (the `ccoctl --name` resource group), not `{infra_id}-rg`.
+   Requires at least one Linux worker MachineSet in `openshift-machine-api` (created during Phase 1).
 
 **Legacy (Windows Server 2022):** Use [azure-machineset_windows_2022.yaml](./azure-machineset_windows_2022.yaml) with SKU `2022-datacenter` if your region or workload requirements require Windows Server 2022 instead of 2025.
 
