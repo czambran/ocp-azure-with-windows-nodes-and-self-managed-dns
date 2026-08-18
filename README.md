@@ -82,6 +82,7 @@ flowchart TB
 10. Subnets use Azure-assigned DHCP (not static IP assignments).
 11. Network security group rules for required cluster ports (6443, 443, 22623, etc.) are in place **before** installation. See the [VNet NSG requirements](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-platform-azure-vnet_installing-azure-customizations).
 12. The Azure account used for `ccoctl` and installation has permissions to create resource groups, storage accounts, user-assigned managed identities, and role assignments in the subscription. See [Azure permissions for installer-provisioned infrastructure](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-azure-permissions_installing-azure-customizations).
+13. (Optional) [yq](https://github.com/mikefarah/yq) is installed if you want to read `install-config.yaml` values in the step 5.3 bash snippet or [examples/ccoctl-azure-create-all.example.sh](./examples/ccoctl-azure-create-all.example.sh) instead of hardcoding `ccoctl` arguments.
 
 ## Phase 1: Install the cluster
 
