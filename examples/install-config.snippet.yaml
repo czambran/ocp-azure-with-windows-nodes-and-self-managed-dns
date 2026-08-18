@@ -5,7 +5,7 @@
 # networkResourceGroupName must not equal baseDomainResourceGroupName.
 #
 # resourceGroupName must match the --name argument passed to ccoctl azure create-all.
-# Add resourceGroupName after ccoctl create-all (ccoctl creates this empty resource group).
+# Set resourceGroupName before ccoctl create-all (ccoctl creates this empty resource group).
 #
 # OCP 4.21 only (Technology Preview): also add these root-level attributes before
 # the fields below. Not required on OCP 4.22+ when user-provisioned DNS is GA:

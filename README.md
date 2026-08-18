@@ -63,7 +63,7 @@ flowchart TB
   LB --> AuthZone
 ```
 
-- **Install resource group (`resourceGroupName` / `ccoctl --name`):** empty resource group created by `ccoctl` before installation. Scoped permissions for managed identities and OIDC configuration. Must match `platform.azure.resourceGroupName` in `install-config.yaml`. At runtime the installer creates `{infra_id}-rg` inside this scope for cluster VMs, load balancers, and disks.
+- **Install resource group (`resourceGroupName` / `ccoctl --name`):** empty resource group created by `ccoctl` before installation. Scoped permissions for managed identities and OIDC configuration. Must match `platform.azure.resourceGroupName` in `install-config.yaml`. The installer deploys cluster VMs, load balancers, and disks into this same resource group (not a separate `{infra_id}-rg` when `resourceGroupName` is set).
 - **Network resource group (same subscription):** pre-provisioned VNet, control plane subnet, and compute subnet. All cluster and Windows worker NICs attach to subnets here (`networkResourceGroupName`).
 - **Dummy DNS resource group (same subscription):** empty DNS zone required by the installer when using user-provisioned DNS (`baseDomainResourceGroupName`). Also passed to `ccoctl` as `--dnszone-resource-group-name`. No customer-facing records are added here.
 - **DNS subscription (or external DNS):** authoritative `api` and `*.apps` records customers use to reach the cluster.
@@ -117,7 +117,7 @@ platform:
     userProvisionedDNS: Enabled
 ```
 
-Set `networking.machineNetwork` to an address range that fits within your VNet CIDR and the subnet ranges you provide. The installer creates cluster resources in its own resource group; it does **not** create the VNet or subnets.
+Set `networking.machineNetwork` to an address range that fits within your VNet CIDR and the subnet ranges you provide. The installer deploys cluster resources into `platform.azure.resourceGroupName`; it does **not** create the VNet or subnets.
 
 See also: [examples/install-config.snippet.yaml](./examples/install-config.snippet.yaml)
 
@@ -261,9 +261,13 @@ Before applying a Windows MachineSet, create the `api-int` DNS record as describ
 
 Windows VMs resolve the internal Kubernetes API at `api-int.<cluster_name>.<base_domain>` using your **authoritative** hosted zone (the same zone as `api` and `*.apps`, not the dummy zone) until WMCO finishes configuring them as worker nodes. The record must point to the **private IP** of the internal load balancer (`${infra_id}-internal`), not the public API load balancer.
 
-1. In the cluster resource group, identify the internal load balancer named `${infra_id}-internal` (the load balancer whose name ends with `-internal`). Get `${infra_id}` from:
+1. In the **cluster resource group** (`platform.azure.resourceGroupName` from your install-config backup — the same value passed to `ccoctl azure create-all --name`), identify the internal load balancer named `${infra_id}-internal` (the load balancer whose name ends with `-internal`). Get `${infra_id}` from:
 
    `oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}'`
+
+   The cluster resource group name is also available from the cluster:
+
+   `oc get infrastructure cluster -o jsonpath='{.status.platformStatus.azure.resourceGroupName}'`
 
 2. Collect the **private** IP from the load balancer rule listening on port **6443**.
 
@@ -271,7 +275,7 @@ Windows VMs resolve the internal Kubernetes API at `api-int.<cluster_name>.<base
 
 ```bash
 infra_id=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')
-cluster_resource_group_name="${infra_id}-rg"
+cluster_resource_group_name=$(oc get infrastructure cluster -o jsonpath='{.status.platformStatus.azure.resourceGroupName}')
 lb_name="${infra_id}-internal"
 
 frontendipconfig_id=$(az network lb show -n "${lb_name}" -g "${cluster_resource_group_name}" \
@@ -322,6 +326,7 @@ dig +noall +answer @8.8.8.8 api-int.<cluster_name>.<base_domain>
 ```bash
 cat ./azure-machineset_windows_2025.yaml | \
   sed "s/<infrastructure_id>/$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')/g" | \
+  sed "s/<cluster_resource_group>/$(oc get infrastructure cluster -o jsonpath='{.status.platformStatus.azure.resourceGroupName}')/g" | \
   sed "s/<windows_machine_set_name>/win1/g" | \
   sed "s/<location>/eastus/g" | \
   sed "s/<zone>/1/g" | \
@@ -331,7 +336,7 @@ cat ./azure-machineset_windows_2025.yaml | \
   oc apply -f -
 ```
 
-Replace `example-network-rg`, `example-vnet`, and `example-worker-subnet` with the values from `platform.azure.networkResourceGroupName`, `platform.azure.virtualNetwork`, and `platform.azure.computeSubnet` in your install-config backup.
+Replace `example-network-rg`, `example-vnet`, and `example-worker-subnet` with the values from `platform.azure.networkResourceGroupName`, `platform.azure.virtualNetwork`, and `platform.azure.computeSubnet` in your install-config backup. The `cluster_resource_group` sed value matches `platform.azure.resourceGroupName` (the `ccoctl --name` resource group), not `{infra_id}-rg`.
 
 **Legacy (Windows Server 2022):** Use [azure-machineset_windows_2022.yaml](./azure-machineset_windows_2022.yaml) with SKU `2022-datacenter` if your region or workload requirements require Windows Server 2022 instead of 2025.
 

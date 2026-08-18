@@ -4,7 +4,7 @@
 # MachineSet name must be 9 characters or fewer on Azure.
 # networkResourceGroup, vnet, and subnet must match install-config.yaml
 # (platform.azure.networkResourceGroupName, virtualNetwork, computeSubnet).
-# resourceGroup is the installer-created cluster resource group ({infra_id}-rg).
+# resourceGroup is platform.azure.resourceGroupName from install-config (ccoctl --name), not {infra_id}-rg.
 
 apiVersion: machine.openshift.io/v1beta1
 kind: MachineSet
@@ -52,7 +52,7 @@ spec:
               storageAccountType: Premium_LRS
             osType: Windows
           publicIP: false
-          resourceGroup: <infrastructure_id>-rg
+          resourceGroup: <cluster_resource_group>
           subnet: <compute_subnet>
           userDataSecret:
             name: windows-user-data
