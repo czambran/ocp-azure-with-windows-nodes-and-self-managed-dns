@@ -1,10 +1,8 @@
-# Legacy — Windows Server 2022 MachineSet template (sku: 2022-datacenter).
-# For Windows Server 2025, use azure-machineset_windows_2025.yaml instead.
-#
 # MachineSet name must be 9 characters or fewer on Azure.
 # networkResourceGroup, vnet, and subnet must match install-config.yaml
 # (platform.azure.networkResourceGroupName, virtualNetwork, computeSubnet).
 # resourceGroup is the installer-created cluster resource group ({infra_id}-rg).
+# Windows Server 2025 — SKU 2025-datacenter-smalldisk (requires WMCO on OCP 4.22+).
 
 apiVersion: machine.openshift.io/v1beta1
 kind: MachineSet
@@ -37,11 +35,14 @@ spec:
           credentialsSecret:
             name: azure-cloud-credentials
             namespace: openshift-machine-api
+          diagnostics:
+            boot:
+              storageAccountType: AzureManaged
           image:
             offer: WindowsServer
             publisher: MicrosoftWindowsServer
             resourceID: ""
-            sku: 2022-datacenter
+            sku: 2025-datacenter-smalldisk
             version: latest
           kind: AzureMachineProviderSpec
           location: <location>

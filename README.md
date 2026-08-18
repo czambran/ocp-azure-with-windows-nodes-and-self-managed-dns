@@ -8,11 +8,11 @@ Installer-provisioned infrastructure (IPI) on Azure normally assumes all resourc
 - **Networking** is pre-provisioned in a **separate resource group within the same subscription** where the installer creates cluster resources — the OpenShift installer consumes an existing VNet and subnets rather than creating them.
 - **Credentials** must use **Microsoft Entra Workload ID** with short-term credentials — cluster components authenticate via user-assigned managed identities created by `ccoctl`, not long-lived service principal secrets in `kube-system`.
 
-The guide also covers the OVN-Kubernetes hybrid overlay configuration required to run **Linux and Windows worker nodes** in the same cluster. Windows workers are added post-install via WMCO and attach to the same pre-provisioned compute subnet as Linux workers.
+The guide also covers the OVN-Kubernetes hybrid overlay configuration required to run **Linux and Windows Server 2025 worker nodes** in the same cluster. Windows workers are added post-install via WMCO and attach to the same pre-provisioned compute subnet as Linux workers.
 
 Install commands are typically run from an **Azure VM bastion**. Credential selection is configured so `ccoctl` uses your interactive `az login` user rather than the VM's managed identity.
 
-**Supported versions:** OpenShift Container Platform **4.22+** is recommended for user-provisioned DNS on Azure (GA). OpenShift Container Platform **4.21** supports the same workflow as Technology Preview and requires additional feature gates — see step 4 in Phase 1. For the GA announcement, see [OCP 4.22 release notes](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/release_notes/ocp-4-22-release-notes).
+**Supported versions:** OpenShift Container Platform **4.22+** is recommended for user-provisioned DNS on Azure (GA) and **Windows Server 2025** worker nodes (WMCO). OpenShift Container Platform **4.21** supports the same workflow as Technology Preview and requires additional feature gates — see step 4 in Phase 1. For supported Windows Server versions, see [OCP 4.22 Windows Container Support](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/windows_container_support_for_openshift/index). For the DNS GA announcement, see [OCP 4.22 release notes](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/release_notes/ocp-4-22-release-notes).
 
 Official references:
 - [Installing a cluster with customizations on Azure](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/installing_on_azure/index#installation-initializing_installing-azure-customizations)
@@ -83,6 +83,8 @@ flowchart TB
 11. Network security group rules for required cluster ports (6443, 443, 22623, etc.) are in place **before** installation. See the [VNet NSG requirements](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-platform-azure-vnet_installing-azure-customizations).
 12. The Azure account used for `ccoctl` and installation has permissions to create resource groups, storage accounts, user-assigned managed identities, and role assignments in the subscription. See [Azure permissions for installer-provisioned infrastructure](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-azure-permissions_installing-azure-customizations).
 13. `credentialsMode: Manual` is set in `install-config.yaml` — this guide uses Microsoft Entra Workload ID with short-term credentials, not mint or passthrough mode.
+14. For **Windows Server 2025** workers, the cluster runs OpenShift Container Platform **4.22+** with WMCO installed from `redhat-operators` (a CSV version that supports Windows Server 2025, OS build 10.0.26100+).
+15. The target Azure **region** publishes the Windows Server 2025 image `MicrosoftWindowsServer/WindowsServer/2025-datacenter-smalldisk`. Verify availability before applying the MachineSet if provisioning fails.
 
 ## Phase 1: Install the cluster
 
@@ -335,10 +337,10 @@ dig +noall +answer @8.8.8.8 api-int.<cluster_name>.<base_domain>
 
    If the secret is missing, check the WMCO CSV, operator pods, and events.
 
-7. Create a Windows MachineSet using the template in this repo. The MachineSet name must be **9 characters or fewer** on Azure. Set network placeholders to match your backed-up `install-config.yaml` — **not** the installer-default `{infra_id}-vnet` / `{infra_id}-worker-subnet` names. Example for a MachineSet named `win1` in `eastus` AZ `1`:
+7. Create a Windows Server 2025 MachineSet using [azure-machineset_windows_2025.yaml](./azure-machineset_windows_2025.yaml). The MachineSet name must be **9 characters or fewer** on Azure. Set network placeholders to match your backed-up `install-config.yaml` — **not** the installer-default `{infra_id}-vnet` / `{infra_id}-worker-subnet` names. The template uses SKU `2025-datacenter-smalldisk`. Container workloads on Windows Server 2025 nodes must use matching base images (for example `ltsc2025` tags and the `windows2025` RuntimeClass — see [OCP Windows Container Support](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/windows_container_support_for_openshift/index)). Example for a MachineSet named `win1` in `eastus` AZ `1`:
 
 ```bash
-cat ./azure-machineset_windows_2022.yaml | \
+cat ./azure-machineset_windows_2025.yaml | \
   sed "s/<infrastructure_id>/$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')/g" | \
   sed "s/<windows_machine_set_name>/win1/g" | \
   sed "s/<location>/eastus/g" | \
@@ -350,6 +352,8 @@ cat ./azure-machineset_windows_2022.yaml | \
 ```
 
 Replace `example-network-rg`, `example-vnet`, and `example-worker-subnet` with the values from `platform.azure.networkResourceGroupName`, `platform.azure.virtualNetwork`, and `platform.azure.computeSubnet` in your install-config backup.
+
+**Legacy (Windows Server 2022):** Use [azure-machineset_windows_2022.yaml](./azure-machineset_windows_2022.yaml) with SKU `2022-datacenter` if your region or workload requirements require Windows Server 2022 instead of 2025.
 
 8. Verify the MachineSet created a **Machine** resource. A Windows worker node will not appear immediately — bootstrapping takes time:
 
@@ -384,6 +388,7 @@ oc get nodes -l node.openshift.io/os_id=Windows
 | Install fails validating `userProvisionedDNS` on OCP 4.21 | Feature gate not enabled | Add `featureSet: CustomNoUpgrade` and `featureGates: ["AzureClusterHostedDNSInstall=true"]` to `install-config.yaml` (4.21 only; not required on 4.22+) |
 | `windows-user-data` missing after WMCO install | WMCO failed to reconcile on deploy | Check WMCO operator pods, logs, and events — do not wait for a MachineSet |
 | Windows Machine fails to provision | MachineSet uses installer-default VNet/subnet names | Set `networkResourceGroup`, `vnet`, and `subnet` to pre-provisioned values from install-config |
+| Windows Machine fails to provision (image not found) | Windows Server 2025 SKU unavailable in region | Run `az vm image list --publisher MicrosoftWindowsServer --offer WindowsServer --sku 2025-datacenter-smalldisk -l <region>`; use another region or the legacy 2022 template |
 | Windows Machine stuck / node never Ready | Compute subnet blocks outbound internet | Allow egress from the compute subnet so WMCO can download OpenSSH from the Microsoft Store |
 | Windows Machine / node fails to join | Missing or wrong `api-int` DNS for Windows workers | Add A record for `api-int.<cluster>.<base_domain>` → private IP of `${infra_id}-internal` LB; verify with `dig @8.8.8.8 api-int...` — do not rely on resolution from a Linux worker node (cluster DNS) |
 | MachineSet fails or VM name error | MachineSet name too long for Azure | MachineSet name must be **9 characters or fewer** |
@@ -398,4 +403,5 @@ oc get nodes -l node.openshift.io/os_id=Windows
 | [examples/ccoctl-azure-create-all.example.sh](./examples/ccoctl-azure-create-all.example.sh) | Run `ccoctl azure create-all` with guide-specific parameters |
 | [examples/cluster-network-03-config.yml](./examples/cluster-network-03-config.yml) | Hybrid OVN-Kubernetes overlay manifest |
 | [wmco-subscription.yaml](./wmco-subscription.yaml) | WMCO OperatorGroup and Subscription |
-| [azure-machineset_windows_2022.yaml](./azure-machineset_windows_2022.yaml) | Windows Server 2022 MachineSet template |
+| [azure-machineset_windows_2025.yaml](./azure-machineset_windows_2025.yaml) | **Primary** — Windows Server 2025 MachineSet template |
+| [azure-machineset_windows_2022.yaml](./azure-machineset_windows_2022.yaml) | **Legacy** — Windows Server 2022 MachineSet template |
