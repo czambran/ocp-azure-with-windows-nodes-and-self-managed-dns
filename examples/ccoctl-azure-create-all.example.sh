@@ -24,6 +24,15 @@ if ! command -v az >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! az account show >/dev/null 2>&1; then
+  echo "Run az login before create-all." >&2
+  exit 1
+fi
+
+# Prefer az login user over VM managed identity (Azure VM bastions)
+unset AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID AZURE_FEDERATED_TOKEN_FILE
+export AZURE_TOKEN_CREDENTIALS=AzureCLICredential
+
 TENANT_ID="$(az account show --query tenantId -o tsv)"
 SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
 

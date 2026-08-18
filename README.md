@@ -10,6 +10,8 @@ Installer-provisioned infrastructure (IPI) on Azure normally assumes all resourc
 
 The guide also covers the OVN-Kubernetes hybrid overlay configuration required to run **Linux and Windows worker nodes** in the same cluster. Windows workers are added post-install via WMCO and attach to the same pre-provisioned compute subnet as Linux workers.
 
+Install commands are typically run from an **Azure VM bastion**. Credential selection is configured so `ccoctl` uses your interactive `az login` user rather than the VM's managed identity.
+
 **Supported versions:** OpenShift Container Platform **4.22+** is recommended for user-provisioned DNS on Azure (GA). OpenShift Container Platform **4.21** supports the same workflow as Technology Preview and requires additional feature gates — see step 4 in Phase 1. For the GA announcement, see [OCP 4.22 release notes](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/release_notes/ocp-4-22-release-notes).
 
 Official references:
@@ -69,17 +71,18 @@ flowchart TB
 ## Prerequisites
 
 1. The OpenShift installer and `oc` CLI are installed on the machine used to run installation commands.
-2. The Azure CLI is installed. You can authenticate with `az login` or environment variables (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET`) when running `ccoctl`.
-3. (Optional: Only needed when generating the install-config.yaml through the installer prompts) A dummy public DNS hosted zone for the desired base domain (e.g. `development.techcorp.com`) exists in the subscription where cluster resources will be deployed. No records are added to this zone — it satisfies the installer only.
-4. The cluster name in `install-config.yaml` and the `ccoctl --name` value must **not** contain `windows`, `microsoft`, or similar words (Azure identity naming restriction). The `ccoctl --name` value must be **9 characters or fewer** if it becomes the Azure resource prefix.
-5. A chosen **infra name** for `ccoctl azure create-all --name` (e.g. `demo1rg`). `ccoctl` creates an **empty** resource group with this name; it becomes `platform.azure.resourceGroupName` in `install-config.yaml`.
-6. A VNet and subnets exist in a **network resource group** in the same subscription used for cluster installation.
-7. Two subnets are available: one for the **control plane** (`controlPlaneSubnet`) and one for **compute/worker** nodes (`computeSubnet`). Windows workers use the compute subnet. The compute subnet (and its route table/NSG) must allow **outbound internet access** — WMCO downloads and installs the OpenSSH server from the Microsoft Store when configuring each Windows node.
-8. The VNet CIDR contains the `networking.machineNetwork` CIDR you will set in `install-config.yaml`.
-9. Subnets use Azure-assigned DHCP (not static IP assignments).
-10. Network security group rules for required cluster ports (6443, 443, 22623, etc.) are in place **before** installation. See the [VNet NSG requirements](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-platform-azure-vnet_installing-azure-customizations).
-11. The Azure account used for `ccoctl` and installation has permissions to create resource groups, storage accounts, user-assigned managed identities, and role assignments in the subscription. See [Azure permissions for installer-provisioned infrastructure](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-azure-permissions_installing-azure-customizations).
-12. `credentialsMode: Manual` is set in `install-config.yaml` — this guide uses Microsoft Entra Workload ID with short-term credentials, not mint or passthrough mode.
+2. The Azure CLI is installed. Authenticate with `az login` (interactive user account). Do **not** use `az login --identity` on the install VM if you intend to run `ccoctl` as a logged-in user.
+3. **Installing from an Azure VM:** If the VM has a managed identity, `ccoctl` and the OpenShift installer may use that identity instead of your `az login` session. Before running `ccoctl` or `openshift-install`, force Azure CLI credentials as described in step 5.3, or remove managed identity from the install VM if it is not required for other workloads.
+4. (Optional: Only needed when generating the install-config.yaml through the installer prompts) A dummy public DNS hosted zone for the desired base domain (e.g. `development.techcorp.com`) exists in the subscription where cluster resources will be deployed. No records are added to this zone — it satisfies the installer only.
+5. The cluster name in `install-config.yaml` and the `ccoctl --name` value must **not** contain `windows`, `microsoft`, or similar words (Azure identity naming restriction). The `ccoctl --name` value must be **9 characters or fewer** if it becomes the Azure resource prefix.
+6. A chosen **infra name** for `ccoctl azure create-all --name` (e.g. `demo1rg`). `ccoctl` creates an **empty** resource group with this name; it becomes `platform.azure.resourceGroupName` in `install-config.yaml`.
+7. A VNet and subnets exist in a **network resource group** in the same subscription used for cluster installation.
+8. Two subnets are available: one for the **control plane** (`controlPlaneSubnet`) and one for **compute/worker** nodes (`computeSubnet`). Windows workers use the compute subnet. The compute subnet (and its route table/NSG) must allow **outbound internet access** — WMCO downloads and installs the OpenSSH server from the Microsoft Store when configuring each Windows node.
+9. The VNet CIDR contains the `networking.machineNetwork` CIDR you will set in `install-config.yaml`.
+10. Subnets use Azure-assigned DHCP (not static IP assignments).
+11. Network security group rules for required cluster ports (6443, 443, 22623, etc.) are in place **before** installation. See the [VNet NSG requirements](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-platform-azure-vnet_installing-azure-customizations).
+12. The Azure account used for `ccoctl` and installation has permissions to create resource groups, storage accounts, user-assigned managed identities, and role assignments in the subscription. See [Azure permissions for installer-provisioned infrastructure](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-azure-permissions_installing-azure-customizations).
+13. `credentialsMode: Manual` is set in `install-config.yaml` — this guide uses Microsoft Entra Workload ID with short-term credentials, not mint or passthrough mode.
 
 ## Phase 1: Install the cluster
 
@@ -149,13 +152,50 @@ oc adm release extract --from="${RELEASE_IMAGE}" \
   -a pull-secret
 ```
 
-   5.3 Log in to Azure so `ccoctl` can detect credentials:
+   5.3 Authenticate as the logged-in user (not the VM managed identity).
 
-   `az login`
-
-   5.4 Create Azure resources and credential manifests with `ccoctl azure create-all`. Map `--dnszone-resource-group-name` to `baseDomainResourceGroupName` and `--network-resource-group-name` to `networkResourceGroupName` from your `install-config.yaml`:
+   On an Azure VM, `ccoctl` uses `DefaultAzureCredential`, which tries the VM managed identity **before** `az login`. Clear identity-related environment variables and restrict credential discovery to the Azure CLI:
 
 ```bash
+unset AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID \
+  AZURE_FEDERATED_TOKEN_FILE AZURE_AUTHORITY_HOST
+
+az login
+az account set --subscription "<subscription_id>"
+
+# Force ccoctl to use az login credentials, not the VM managed identity
+export AZURE_TOKEN_CREDENTIALS=AzureCLICredential
+```
+
+   Verify you are using the intended account:
+
+```bash
+az account show --query "{subscription:id, user:user.name, tenant:tenantId}" -o table
+az ad signed-in-user show --query "{displayName:userPrincipalName}" -o table
+```
+
+   If you previously ran the installer on this VM and it created a managed-identity profile, remove it:
+
+```bash
+rm -f ~/.azure/osServicePrincipal.json
+```
+
+   When you run `openshift-install create install-config` or `create manifests`, provide a **service principal** `clientId` and `clientSecret` with install permissions. On a VM with managed identity, do not leave both blank — the installer will use the VM identity instead of your user account.
+
+   **Alternative (service principal):** To bypass both managed identity and `az login`, export explicit credentials before `ccoctl` and unset `AZURE_TOKEN_CREDENTIALS`:
+
+```bash
+export AZURE_CLIENT_ID="<service_principal_app_id>"
+export AZURE_CLIENT_SECRET="<service_principal_password>"
+export AZURE_TENANT_ID="<tenant_guid>"
+unset AZURE_TOKEN_CREDENTIALS
+```
+
+   5.4 Create Azure resources and credential manifests with `ccoctl azure create-all`. Keep `AZURE_TOKEN_CREDENTIALS=AzureCLICredential` set in the same shell session. Map `--dnszone-resource-group-name` to `baseDomainResourceGroupName` and `--network-resource-group-name` to `networkResourceGroupName` from your `install-config.yaml`:
+
+```bash
+export AZURE_TOKEN_CREDENTIALS=AzureCLICredential
+
 TENANT_ID=$(az account show --query tenantId -o tsv)
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 
@@ -335,6 +375,9 @@ oc get nodes -l node.openshift.io/os_id=Windows
 | Install fails validating subnets | Wrong subnet names or network resource group | Verify `networkResourceGroupName`, `virtualNetwork`, `controlPlaneSubnet`, and `computeSubnet` in `install-config.yaml` |
 | Install fails on Azure API / NSG | Missing NSG rules on network subnets | Apply required port rules before install (see Red Hat VNet NSG requirements) |
 | `ccoctl azure create-all` fails on DNS zone RG | Missing or wrong `--dnszone-resource-group-name` | Set to `platform.azure.baseDomainResourceGroupName` (dummy DNS RG) |
+| `ccoctl create-all` permission errors on Azure VM | VM managed identity used instead of logged-in user | `export AZURE_TOKEN_CREDENTIALS=AzureCLICredential` after `az login`; unset `AZURE_CLIENT_ID` if set for a VM user-assigned identity |
+| Installer uses VM managed identity despite `az login` | `~/.azure/osServicePrincipal.json` has no client secret | `rm ~/.azure/osServicePrincipal.json` and provide service principal `clientId` + `clientSecret` when prompted |
+| Wrong Azure subscription used | Stale `az` session | `az account set --subscription "<subscription_id>"` and verify with `az account show` |
 | Install fails on resource group | `resourceGroupName` ≠ `ccoctl --name` or RG not empty | Align names; use a new empty resource group created by `ccoctl` |
 | Components lack Azure permissions after install | `ccoctl` manifests or `tls` not copied | Run `cp ccoctl-output/manifests/* ./manifests/` and `cp -a ccoctl-output/tls .` before `create cluster` |
 | `ccoctl` fails to run | Wrong binary architecture or not extracted | Re-extract with `--command=ccoctl.rhel9` on RHEL 9 hosts |
