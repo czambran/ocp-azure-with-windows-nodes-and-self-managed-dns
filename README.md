@@ -82,9 +82,6 @@ flowchart TB
 10. Subnets use Azure-assigned DHCP (not static IP assignments).
 11. Network security group rules for required cluster ports (6443, 443, 22623, etc.) are in place **before** installation. See the [VNet NSG requirements](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-platform-azure-vnet_installing-azure-customizations).
 12. The Azure account used for `ccoctl` and installation has permissions to create resource groups, storage accounts, user-assigned managed identities, and role assignments in the subscription. See [Azure permissions for installer-provisioned infrastructure](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_azure/installer-provisioned-infrastructure#installation-azure-permissions_installing-azure-customizations).
-13. `credentialsMode: Manual` is set in `install-config.yaml` — this guide uses Microsoft Entra Workload ID with short-term credentials, not mint or passthrough mode.
-14. For **Windows Server 2025** workers, the cluster runs OpenShift Container Platform **4.22+** with WMCO installed from `redhat-operators` (a CSV version that supports Windows Server 2025, OS build 10.0.26100+).
-15. The target Azure **region** publishes the Windows Server 2025 image `MicrosoftWindowsServer/WindowsServer/2025-datacenter-smalldisk`. Verify availability before applying the MachineSet if provisioning fails.
 
 ## Phase 1: Install the cluster
 
@@ -93,7 +90,7 @@ The steps below assume the OpenShift installer is installed on the machine you w
 1. Create a new directory (avoid reusing an existing directory) to house the files required for installation of the cluster. e.g. `mkdir ocp-cluster; cd ocp-cluster`
 2. Generate the installation files: `openshift-install create install-config --dir .`. Follow the prompts and select the correct options for your deployment. When prompted, provide the network resource group, VNet, and subnet names from your pre-provisioned network landing zone. Make sure to remember the cluster name — you will need it to create DNS records.
 3. Open the newly created `install-config.yaml` file and configure replicas, `networking.machineNetwork`, `credentialsMode: Manual`, and the pre-provisioned network fields under `platform.azure` (see step 4).
-4. Under `platform.azure`, reference your pre-provisioned VNet, enable user-provisioned DNS, and set `credentialsMode: Manual` for Microsoft Entra Workload ID. On OpenShift Container Platform **4.22+**, set `userProvisionedDNS: Enabled` — no feature gates are required. The guide-specific fields in `install-config.yaml` should look like this (adjust values for your environment; do not copy pull secrets or SSH keys from this example). Add `resourceGroupName` after step 5 — it must match `ccoctl --name`:
+4. Under `platform.azure`, reference your pre-provisioned VNet, enable user-provisioned DNS, and configure Microsoft Entra Workload ID. This guide requires `credentialsMode: Manual` in `install-config.yaml` (short-term credentials via `ccoctl`, not mint or passthrough mode). On OpenShift Container Platform **4.22+**, set `userProvisionedDNS: Enabled` — no feature gates are required. The guide-specific fields in `install-config.yaml` should look like this (adjust values for your environment; do not copy pull secrets or SSH keys from this example). Add `resourceGroupName` after step 5 — it must match `ccoctl --name`:
 
 ```yaml
 credentialsMode: Manual
@@ -272,6 +269,14 @@ Windows workers require an additional `api-int` record — see Phase 2.
 ## Phase 2: Deploy Windows worker nodes
 
 Note: The commands below assume your `oc` context is set to the installed cluster.
+
+### Prerequisites
+
+Before deploying Windows Server 2025 workers:
+
+1. Phase 1 completed successfully on OpenShift Container Platform **4.22+** (WMCO supports Windows Server 2025, OS build 10.0.26100+).
+2. Your cluster has the **Red Hat OpenShift support for Windows Containers** subscription (required to install WMCO from `redhat-operators`).
+3. The cluster Azure **region** publishes the Windows Server 2025 image `MicrosoftWindowsServer/WindowsServer/2025-datacenter-smalldisk`. Verify before applying the MachineSet if provisioning fails.
 
 Windows node bootstrap requires outbound connectivity from the **compute subnet** to the internet (or an approved egress path). WMCO installs OpenSSH on each Windows VM by downloading it from the **Microsoft Store** during node configuration. Restricted subnets without outbound access will cause Windows Machines to stall or fail during WMCO setup.
 
