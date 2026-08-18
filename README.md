@@ -226,20 +226,25 @@ fi
 
    See also: [examples/ccoctl-azure-create-all.example.sh](./examples/ccoctl-azure-create-all.example.sh)
 
-6. To run both Linux and Windows nodes in the same cluster, configure hybrid networking in OVN-Kubernetes. Generate installation manifests from `install-config.yaml`. This process will **consume** the `install-config.yaml` file, so back it up first. See the [hybrid OVN-Kubernetes documentation](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/installing_on_azure/index#configuring-hybrid-ovnkubernetes_installing-azure-customizations) for details.
+6. Generate installation manifests with `openshift-install create manifests`. This step is required for two purposes:
 
-   6.1 Generate manifest files: `openshift-install create manifests --dir .`
+   - **Workload Identity:** `create manifests` creates the `manifests/` directory and installation directory layout where you copy credential manifests and TLS signing keys from `ccoctl` (step 5.4).
+   - **Hybrid overlay (Windows nodes):** You add `manifests/cluster-network-03-config.yml` to enable OVN-Kubernetes hybrid overlay networking so Linux and Windows workers can run in the same cluster.
 
-   6.2 Copy Workload Identity manifests and TLS signing keys from `ccoctl` output:
+   This process will **consume** the `install-config.yaml` file, so back it up first. See the [hybrid OVN-Kubernetes documentation](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/installing_on_azure/index#configuring-hybrid-ovnkubernetes_installing-azure-customizations) for hybrid overlay details.
+
+   6.1 Generate the installation directory and `manifests/` folder: `openshift-install create manifests --dir .`
+
+   6.2 Copy Workload Identity manifests and TLS signing keys from `ccoctl` output into the directories created in step 6.1:
 
 ```bash
 cp ccoctl-output/manifests/* ./manifests/
 cp -a ccoctl-output/tls .
 ```
 
-   6.3 Create the hybrid network manifest: `touch manifests/cluster-network-03-config.yml`
+   6.3 Add the hybrid overlay manifest required for Windows nodes: `touch manifests/cluster-network-03-config.yml`
 
-   6.4 Edit the file and add the following content. Set `hybridClusterNetwork.cidr` to a range that **does not overlap** with `networking.clusterNetwork` in your backed-up `install-config.yaml`. For example, if `clusterNetwork` is `10.128.0.0/14`, use the next block such as `10.132.0.0/14`:
+   6.4 Edit `manifests/cluster-network-03-config.yml` and add the following content. Set `hybridClusterNetwork.cidr` to a range that **does not overlap** with `networking.clusterNetwork` in your backed-up `install-config.yaml`. For example, if `clusterNetwork` is `10.128.0.0/14`, use the next block such as `10.132.0.0/14`:
 
 ```yaml
 apiVersion: operator.openshift.io/v1
