@@ -170,6 +170,9 @@ if [[ -z "${INFRA_NAME}" || "${INFRA_NAME}" == "null" ]]; then
   exit 1
 fi
 
+# OIDC issuer blob storage; 3-24 chars, lowercase letters and numbers only (no hyphens).
+STORAGE_ACCOUNT_NAME="${STORAGE_ACCOUNT_NAME:-${INFRA_NAME}oidc}"
+
 ./ccoctl azure create-all \
   --name="${INFRA_NAME}" \
   --output-dir=./ccoctl-output \
@@ -179,8 +182,11 @@ fi
   --credentials-requests-dir=./credrequests \
   --dnszone-resource-group-name="${DNS_ZONE_RG}" \
   --network-resource-group-name="${NETWORK_RG}" \
+  --storage-account-name="${STORAGE_ACCOUNT_NAME}" \
   --preserve-existing-roles
 ```
+
+   Specify `--storage-account-name` explicitly when the name `ccoctl` derives from `--name` is invalid (Azure requires 3–24 characters, lowercase letters and numbers only). The example above uses `${INFRA_NAME}oidc` when `INFRA_NAME` is alphanumeric and short enough to stay within 24 characters.
 
    Requires [yq](https://github.com/mikefarah/yq) to parse `install-config.yaml`. On OCP 4.21 Technology Preview installs, add `--enable-tech-preview`.
 

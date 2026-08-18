@@ -41,6 +41,13 @@ if [[ -z "${INFRA_NAME}" || "${INFRA_NAME}" == "null" ]]; then
   exit 1
 fi
 
+# OIDC issuer blob storage; 3-24 chars, lowercase letters and numbers only (no hyphens).
+STORAGE_ACCOUNT_NAME="${STORAGE_ACCOUNT_NAME:-${INFRA_NAME}oidc}"
+if [[ ! "${STORAGE_ACCOUNT_NAME}" =~ ^[a-z0-9]{3,24}$ ]]; then
+  echo "STORAGE_ACCOUNT_NAME must be 3-24 lowercase letters or numbers. Set STORAGE_ACCOUNT_NAME explicitly." >&2
+  exit 1
+fi
+
 # Credential selection — see docs/azure-install-identity.md
 if [[ -n "${AZURE_CLIENT_ID:-}" && -n "${AZURE_CLIENT_SECRET:-}" ]]; then
   unset AZURE_TOKEN_CREDENTIALS
@@ -75,6 +82,7 @@ fi
   --credentials-requests-dir="${CREDREQUESTS_DIR}" \
   --dnszone-resource-group-name="${DNS_ZONE_RG}" \
   --network-resource-group-name="${NETWORK_RG}" \
+  --storage-account-name="${STORAGE_ACCOUNT_NAME}" \
   --preserve-existing-roles \
   "${EXTRA_ARGS[@]}"
 
